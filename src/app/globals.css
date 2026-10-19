@@ -1,26 +1,39 @@
 @import "tailwindcss";
 
+/* Broko design tokens. Red sampled from the supplied logo files (#DC0A25). */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --broko-red: #dc0a25;
+  --broko-red-dark: #b8081f;
+  --broko-red-soft: #fdecee;
+  --broko-black: #111111;
+  --surface: #ffffff;
+  --background: #f7f7f8;
+  --border: #e5e7eb;
+  --text: #171717;
+  --text-muted: #6b7280;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-brand: var(--broko-red);
+  --color-brand-dark: var(--broko-red-dark);
+  --color-brand-soft: var(--broko-red-soft);
+  --color-ink: var(--broko-black);
+  --color-surface: var(--surface);
+  --color-page: var(--background);
+  --color-line: var(--border);
+  --color-fg: var(--text);
+  --color-muted: var(--text-muted);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --shadow-card: 0 1px 2px rgb(17 17 17 / 0.05);
 }
 
 body {
   background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--broko-red);
+  outline-offset: 2px;
 }
