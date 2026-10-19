@@ -10,7 +10,7 @@ echo "BROKO_DEMO_MODE=true" > .env.local
 npm run dev
 ```
 
-Demo mode uses fake in-memory data and placeholder accounts, and is disabled in production builds.
+Demo mode uses synthetic data and placeholder accounts. It is off in production unless explicitly enabled with an access code, and impossible if any Supabase variable is set. See `docs/DEMO_MODE.md`.
 
 ## Backend status
 

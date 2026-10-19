@@ -9,7 +9,7 @@ import {
   LogOut, Megaphone, Menu, PieChart, Plug, Search, Settings, ShieldCheck, Users, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
-import { signOut } from "@/app/login/actions";
+import { resetDemo, signOut } from "@/app/login/actions";
 import { Avatar, cx } from "@/components/ui";
 import { ROLE_LABEL, type AppNotification, type Profile } from "@/lib/types";
 
@@ -144,7 +144,8 @@ export function AppShell({ user, notifications, demo, children }: { user: Profil
       <Header user={user} notifications={notifications} onMenu={() => setOpen(true)} />
       {demo && (
         <div role="status" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 lg:px-6">
-          <Building2 size={14} aria-hidden /> <strong>Demo mode</strong> — placeholder data held in memory. Supabase is not connected; nothing here is real Broko data.
+          <Building2 size={14} aria-hidden /> <strong>Demo mode</strong> — synthetic sample data only; nothing here is real Broko data. Your changes are temporary: kept only in this browser for up to 24 hours, then discarded.
+          <form action={resetDemo} className="ml-auto"><button type="submit" className="rounded border border-amber-300 px-2 py-0.5 font-medium hover:bg-amber-100">Reset demo</button></form>
         </div>
       )}
       <main className="px-4 py-5 lg:px-6">{children}</main>

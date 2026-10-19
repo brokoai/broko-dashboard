@@ -1,79 +1,66 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { isActive, isDueToday, isOverdue } from "@/lib/dates";
 import { canAssignTo } from "@/lib/permissions";
 import type {
-  ActivityEvent, AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
+  AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
 } from "@/lib/types";
 import { INTEGRATION_ORDER } from "@/lib/types";
 import { UserFacingError, type Repo } from "../types";
+import {
+  decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
+  SEED_IDS, statusIndex, toTuple, type DemoState,
+} from "./state";
+import { DEMO_USERS } from "./users";
 
-/**
- * DEMO BACKEND ONLY. In-memory, resets on server restart. All names are
- * placeholders and are not real Broko employees. Never loaded in production.
- */
-export const DEMO_USERS: Profile[] = [
-  { id: "demo-admin", full_name: "Demo Administrator", email: null, role: "admin", title: "Application Administrator" },
-  { id: "demo-member-a", full_name: "Demo Member A", email: null, role: "member", title: null },
-  { id: "demo-member-b", full_name: "Demo Member B", email: null, role: "member", title: null },
-];
+export { DEMO_USERS };
 
-interface Store { tasks: Task[]; events: ActivityEvent[]; notifications: Map<string, AppNotification[]> }
-
-const day = 86_400_000;
-const iso = (offsetDays: number) => new Date(Date.now() + offsetDays * day).toISOString();
-const nameOf = (id: string | null) => DEMO_USERS.find((u) => u.id === id)?.full_name ?? null;
-
-function logEvent(s: Store, e: Pick<ActivityEvent, "event_type" | "description" | "actor_id" | "related_task_id">) {
-  const t = s.tasks.find((x) => x.id === e.related_task_id);
-  s.events.unshift({ ...e, id: randomUUID(), status: "processed", related_task_title: t?.title ?? null, created_at: new Date().toISOString() });
+/** Where a visitor's demo changes live (a signed cookie in the app, memory in tests). */
+export interface StateStore {
+  read(): Promise<string | null | undefined>;
+  write(value: string): Promise<void>;
 }
 
-function seed(): Store {
-  const s: Store = { tasks: [], events: [], notifications: new Map() };
-  const rows: [string, TaskInput["status"], TaskInput["priority"], string | null, number | null][] = [
-    ["[Demo] Review sample proposal", "open", "high", "demo-member-a", 0],
-    ["[Demo] Follow up on sample enquiry", "in_progress", "urgent", "demo-member-b", -2],
-    ["[Demo] Update sample record", "open", "medium", "demo-admin", 1],
-    ["[Demo] Prepare sample deck", "completed", "low", "demo-member-a", -3],
-    ["[Demo] Schedule sample visit", "open", "low", "demo-member-b", 5],
-  ];
-  for (const [title, status, priority, assigned_to, due] of rows) {
-    const created = iso(-4);
-    s.tasks.push({
-      id: randomUUID(), title, description: null, status, priority, assigned_to,
-      assignee_name: nameOf(assigned_to), created_by: "demo-admin",
-      due_at: due === null ? null : iso(due), source: "manual", external_reference: null,
-      created_at: created, updated_at: created,
-      completed_at: status === "completed" ? iso(-3) : null,
-    });
-    const t = s.tasks[s.tasks.length - 1];
-    logEvent(s, { event_type: "task_created", description: `Task created: ${title}`, actor_id: "demo-admin", related_task_id: t.id });
-  }
+export function memoryStore(initial?: string): StateStore & { value: string | undefined } {
+  const s = { value: initial, read: async () => s.value, write: async (v: string) => { s.value = v; } };
   return s;
 }
 
-const g = globalThis as unknown as { __brokoDemo?: Store };
-const store = (): Store => (g.__brokoDemo ??= seed());
-/** Test helper: discard in-memory state. */
-export const resetDemoStore = () => { g.__brokoDemo = undefined; };
+const FULL = "Demo storage is full. Use “Reset demo” to start over.";
+const nameOf = (id: string | null) => DEMO_USERS.find((u) => u.id === id)?.full_name ?? null;
 
-export function createDemoRepo(user: Profile): Repo {
+/** DEMO BACKEND ONLY: synthetic data, per-visitor, bounded. Never connects to anything real. */
+export function createDemoRepo(user: Profile, store: StateStore, now: () => number = Date.now): Repo {
   const admin = user.role === "admin";
   const visible = (t: Task) => admin || t.assigned_to === user.id || t.created_by === user.id;
-  const visibleTasks = () => store().tasks.filter(visible);
-  // Resolve titles at read time so renamed tasks show their current name (as a SQL join would).
-  const withTitles = (events: ActivityEvent[]) =>
-    events.map((e) => ({ ...e, related_task_title: store().tasks.find((t) => t.id === e.related_task_id)?.title ?? e.related_task_title }));
+  const load = async () => decodeState(await store.read());
+  const view = async () => materialize(await load(), now());
+  const visibleTasks = async () => (await view()).tasks.filter(visible);
+
+  async function save(s: DemoState) {
+    if (encodedSize(s) > LIMITS.maxEncodedBytes) throw new UserFacingError(FULL);
+    await store.write(encodeState(s));
+  }
+  function checkText(title: string, description: string | null) {
+    if (title.length > LIMITS.title) throw new UserFacingError(`In the demo, titles are limited to ${LIMITS.title} characters.`);
+    if ((description ?? "").length > LIMITS.description) throw new UserFacingError(`In the demo, descriptions are limited to ${LIMITS.description} characters.`);
+  }
+  function upsert(s: DemoState, task: Task) {
+    const i = s.t.findIndex((t) => t[0] === task.id);
+    if (i >= 0) s.t[i] = toTuple(task);
+    else if (s.t.length >= LIMITS.tasks) {
+      throw new UserFacingError(`The demo keeps up to ${LIMITS.tasks} changed or new tasks. Use “Reset demo” to start over.`);
+    } else s.t.unshift(toTuple(task));
+  }
+  const pushEvent = (s: DemoState, ev: ReturnType<typeof eventTuple>) => {
+    s.e.push(ev);
+    while (s.e.length > LIMITS.events) s.e.shift();
+  };
 
   return {
-    async listTasks() { return visibleTasks().map((t) => ({ ...t })); },
-    async getTask(id) {
-      const t = store().tasks.find((x) => x.id === id && visible(x));
-      return t ? { ...t } : null;
-    },
+    async listTasks() { return visibleTasks(); },
+    async getTask(id) { return (await visibleTasks()).find((t) => t.id === id) ?? null; },
     async taskCounts(): Promise<TaskCounts> {
-      const ts = visibleTasks();
+      const ts = await visibleTasks();
       return {
         open: ts.filter(isActive).length,
         due_today: ts.filter(isDueToday).length,
@@ -81,66 +68,63 @@ export function createDemoRepo(user: Profile): Repo {
         completed: ts.filter((t) => t.status === "completed").length,
       };
     },
-    async createTask(input) {
-      const s = store();
-      // Mirrors the database rule a real backend must enforce itself.
+    async createTask(input: TaskInput) {
+      // Mirrors the rule a real backend must enforce itself.
       if (!canAssignTo(user, input.assigned_to)) throw new UserFacingError("Only administrators can assign tasks to other people.");
-      const now = new Date().toISOString();
-      const t: Task = {
-        id: randomUUID(), ...input, assignee_name: nameOf(input.assigned_to), created_by: user.id,
-        source: "manual", external_reference: null, created_at: now, updated_at: now,
-        completed_at: input.status === "completed" ? now : null,
+      checkText(input.title, input.description);
+      const s = await load();
+      const ts = Math.floor(now() / 1000);
+      const iso = new Date(ts * 1000).toISOString();
+      const task: Task = {
+        id: newTaskId(), ...input, assignee_name: nameOf(input.assigned_to), created_by: user.id,
+        source: "manual", external_reference: null, created_at: iso, updated_at: iso,
+        completed_at: input.status === "completed" ? iso : null,
       };
-      s.tasks.unshift(t);
-      logEvent(s, { event_type: "task_created", description: `Task created: ${t.title}`, actor_id: user.id, related_task_id: t.id });
-      if (t.assigned_to) logEvent(s, { event_type: "task_assigned", description: `Task assigned: ${t.title}`, actor_id: user.id, related_task_id: t.id });
-      return { ...t };
+      upsert(s, task);
+      pushEvent(s, eventTuple("task_created", task.id, ts, user.id));
+      if (task.assigned_to) pushEvent(s, eventTuple("task_assigned", task.id, ts, user.id));
+      await save(s);
+      return task;
     },
     async updateTask(id, patch) {
-      const s = store();
-      const t = s.tasks.find((x) => x.id === id && visible(x));
-      if (!t) throw new UserFacingError("Task not found.");
-      if (patch.assigned_to !== undefined && patch.assigned_to !== t.assigned_to && !canAssignTo(user, patch.assigned_to)) {
+      const s = await load();
+      const current = materialize(s, now()).tasks.filter(visible).find((t) => t.id === id);
+      if (!current) throw new UserFacingError("Task not found.");
+      if (patch.assigned_to !== undefined && patch.assigned_to !== current.assigned_to && !canAssignTo(user, patch.assigned_to)) {
         throw new UserFacingError("Only administrators can assign tasks to other people.");
       }
-      const before = { status: t.status, assigned_to: t.assigned_to };
-      Object.assign(t, patch);
-      t.assignee_name = nameOf(t.assigned_to);
-      t.updated_at = new Date().toISOString();
-      t.completed_at = t.status === "completed" ? (before.status === "completed" ? t.completed_at : t.updated_at) : null;
-      if (t.assigned_to && t.assigned_to !== before.assigned_to) {
-        logEvent(s, { event_type: "task_assigned", description: `Task assigned: ${t.title}`, actor_id: user.id, related_task_id: t.id });
-        const list = s.notifications.get(t.assigned_to) ?? [];
-        list.unshift({ id: randomUUID(), title: `Task assigned to you: ${t.title}`, created_at: t.updated_at, read_at: null });
-        s.notifications.set(t.assigned_to, list);
+      const next: Task = { ...current, ...patch };
+      checkText(next.title, next.description);
+      const ts = Math.floor(now() / 1000);
+      next.assignee_name = nameOf(next.assigned_to);
+      next.updated_at = new Date(ts * 1000).toISOString();
+      next.completed_at = next.status === "completed" ? (current.status === "completed" ? current.completed_at : next.updated_at) : null;
+      upsert(s, next);
+      if (next.assigned_to && next.assigned_to !== current.assigned_to) pushEvent(s, eventTuple("task_assigned", id, ts, user.id));
+      if (next.status !== current.status) {
+        pushEvent(s, eventTuple(next.status === "completed" ? "task_completed" : "task_updated", id, ts, user.id, statusIndex(current.status), statusIndex(next.status)));
       }
-      if (t.status !== before.status) {
-        logEvent(s, { event_type: t.status === "completed" ? "task_completed" : "task_updated", description: `Task "${t.title}" status: ${before.status} -> ${t.status}`, actor_id: user.id, related_task_id: t.id });
-      }
-      return { ...t };
+      await save(s);
+      return next;
     },
     async listPeople(): Promise<Person[]> { return DEMO_USERS.map(({ id, full_name }) => ({ id, full_name })); },
     async listActivity(limit) {
-      const s = store();
-      const ids = new Set(visibleTasks().map((t) => t.id));
-      return withTitles(
-        s.events
-          .filter((e) => admin || e.actor_id === user.id || (e.related_task_id && ids.has(e.related_task_id)))
-          .slice(0, limit),
-      );
+      const { tasks, events } = await view();
+      const ids = new Set(tasks.filter(visible).map((t) => t.id));
+      return events.filter((e) => admin || e.actor_id === user.id || (e.related_task_id && ids.has(e.related_task_id))).slice(0, limit);
     },
     async listTaskActivity(taskId, limit) {
-      const s = store();
-      if (!s.tasks.some((t) => t.id === taskId && visible(t))) return [];
-      return withTitles(s.events.filter((e) => e.related_task_id === taskId).slice(0, limit));
+      const { tasks, events } = await view();
+      if (!tasks.some((t) => t.id === taskId && visible(t))) return [];
+      return events.filter((e) => e.related_task_id === taskId).slice(0, limit);
     },
     async listIntegrations(): Promise<Integration[]> {
       return INTEGRATION_ORDER.map((provider) => ({ provider, status: "pending_setup", last_sync_at: null, last_error: null }));
     },
     async teamWorkload(): Promise<TeamMember[]> {
-      const all = store().tasks;
+      const { tasks } = await view();
       return DEMO_USERS.map((u) => {
-        const mine = all.filter((t) => t.assigned_to === u.id);
+        const mine = tasks.filter((t) => t.assigned_to === u.id);
         return {
           member_id: u.id, full_name: u.full_name, title: u.title, role: u.role,
           assigned_count: mine.length,
@@ -149,6 +133,14 @@ export function createDemoRepo(user: Profile): Repo {
         };
       });
     },
-    async listNotifications() { return store().notifications.get(user.id) ?? []; },
+    async listNotifications(): Promise<AppNotification[]> {
+      const { tasks, events } = await view();
+      const byId = new Map(tasks.map((t) => [t.id, t]));
+      return events
+        .filter((e) => e.event_type === "task_assigned" && e.actor_id !== user.id && !SEED_IDS.has(e.related_task_id ?? "")
+          && byId.get(e.related_task_id ?? "")?.assigned_to === user.id)
+        .slice(0, 20)
+        .map((e) => ({ id: e.id, title: `Task assigned to you: ${e.related_task_title}`, created_at: e.created_at, read_at: null }));
+    },
   };
 }

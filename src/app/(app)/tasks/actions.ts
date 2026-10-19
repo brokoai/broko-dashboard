@@ -45,7 +45,7 @@ function parse(form: FormData): { input?: TaskInput; state?: TaskActionState } {
 }
 
 export async function createTask(_prev: TaskActionState, form: FormData): Promise<TaskActionState> {
-  const user = await requireUser();
+  const user = await requireUser(); // authenticate before touching any input
   const { input, state } = parse(form);
   if (!input) return state!;
   const denied = checkTaskChange(user, null, input);
@@ -77,6 +77,7 @@ async function changeTask(id: string, patch: Partial<TaskInput>): Promise<string
 }
 
 export async function updateTask(id: string, _prev: TaskActionState, form: FormData): Promise<TaskActionState> {
+  await requireUser(); // authenticate before touching any input
   const { input, state } = parse(form);
   if (!input) return state!;
   const error = await changeTask(id, input);
@@ -84,6 +85,7 @@ export async function updateTask(id: string, _prev: TaskActionState, form: FormD
 }
 
 export async function setTaskStatus(id: string, status: TaskStatus): Promise<{ error?: string }> {
+  await requireUser(); // authenticate before touching any input
   if (!TASK_STATUSES.includes(status)) return { error: "Invalid status." };
   const error = await changeTask(id, { status });
   return error ? { error } : {};

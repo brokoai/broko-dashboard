@@ -1,6 +1,8 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { requireUser } from "@/lib/auth";
 import { getBackend } from "@/lib/backend";
 
 export interface LoginState { error?: string }
@@ -14,9 +16,20 @@ export async function signInWithPassword(_prev: LoginState, form: FormData): Pro
   redirect("/");
 }
 
-export async function signInAsDemo(form: FormData) {
-  const demo = (await getBackend()).demo; // undefined unless demo mode is on
-  if (!demo || !(await demo.signInAs(String(form.get("user") ?? "")))) redirect("/login");
+/** Demo entry point. The access code is validated here, on the server, never in the browser. */
+export async function signInAsDemo(_prev: LoginState, form: FormData): Promise<LoginState> {
+  const demo = (await getBackend()).demo; // undefined unless demo mode is enabled
+  if (!demo) redirect("/login");
+  const { error } = await demo.signInAs(String(form.get("user") ?? ""), String(form.get("code") ?? ""));
+  if (error) return { error };
+  redirect("/");
+}
+
+/** Clears only the signed-in visitor's own demo changes. */
+export async function resetDemo() {
+  await requireUser();
+  await (await getBackend()).demo?.reset();
+  revalidatePath("/", "layout"); // the redirect target is usually the current page; drop its cached view
   redirect("/");
 }
 

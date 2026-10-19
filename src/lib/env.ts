@@ -1,19 +1,70 @@
 import "server-only";
 
-export const supabaseConfigured = (): boolean =>
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+type Env = Record<string, string | undefined>;
 
-/** True if the process looks like a production deployment, whatever NODE_ENV says. */
-const looksLikeProduction = (): boolean =>
-  process.env.NODE_ENV === "production" ||
-  process.env.BROKO_ENV === "production" ||
-  process.env.VERCEL_ENV === "production" ||
-  Boolean(process.env.AWS_EXECUTION_ENV) ||
-  Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+const SUPABASE_NAME = /^(NEXT_PUBLIC_)?SUPABASE_/i;
+// Supabase's Vercel integration also injects these Postgres connection variables.
+const SUPABASE_POSTGRES_NAME = /^POSTGRES_(URL|PRISMA_URL|URL_NON_POOLING)$/i;
 
 /**
- * Demo mode: in-memory fake data with fake sign-in. Only when no real backend is
- * configured, explicitly enabled, and never in anything that looks like production.
+ * True if ANY Supabase configuration is present (any SUPABASE_* / NEXT_PUBLIC_SUPABASE_* variable,
+ * or the integration's Postgres URLs) with a non-empty value. Demo mode must then be impossible.
+ * Deliberately broad and conservative: a whitespace-only value still counts as present.
  */
-export const demoMode = (): boolean =>
-  !supabaseConfigured() && process.env.BROKO_DEMO_MODE === "true" && !looksLikeProduction();
+export const supabasePresent = (env: Env): boolean =>
+  Object.entries(env).some(([name, value]) => (SUPABASE_NAME.test(name) || SUPABASE_POSTGRES_NAME.test(name)) && !!value);
+
+/** True if the real Supabase backend can be used (both public values set). */
+export const supabaseUsable = (env: Env): boolean =>
+  Boolean(env.NEXT_PUBLIC_SUPABASE_URL && env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+/** True if the process looks like a production deployment, whatever NODE_ENV says. */
+export const looksLikeProduction = (env: Env): boolean =>
+  env.NODE_ENV === "production" ||
+  env.BROKO_ENV === "production" ||
+  env.VERCEL_ENV === "production" ||
+  Boolean(env.AWS_EXECUTION_ENV) ||
+  Boolean(env.AWS_LAMBDA_FUNCTION_NAME);
+
+export const MIN_ACCESS_CODE_LENGTH = 12;
+export const MIN_SESSION_SECRET_LENGTH = 32;
+
+/** Cheap guard against obviously weak secrets (generate a real one with a CSPRNG; see docs/DEMO_MODE.md). */
+export const strongEnoughSecret = (s: string | undefined): s is string =>
+  !!s && s.length >= MIN_SESSION_SECRET_LENGTH && new Set(s).size >= 12;
+
+export interface DemoConfig {
+  enabled: boolean;
+  /** Shared access code users type. Server-side only; never used as key material on its own. */
+  accessCode?: string;
+  /** Random server-only secret that keys cookie signatures. Server-side only. */
+  sessionSecret?: string;
+  /** Why demo is off (for logs/tests; never shown to users). */
+  reason?: string;
+}
+
+/**
+ * Demo mode = synthetic data, no real backend. Rules:
+ *  - Impossible whenever any Supabase configuration is present.
+ *  - Needs BROKO_DEMO_MODE=true.
+ *  - Production-like environments additionally need ALL of: BROKO_ALLOW_PRODUCTION_DEMO=true,
+ *    BROKO_DEMO_ACCESS_CODE (>= 12 chars) and BROKO_DEMO_SESSION_SECRET (>= 32 chars, random).
+ *    Otherwise demo stays off.
+ * Local development needs only BROKO_DEMO_MODE=true (a fixed, non-secret development key is used).
+ */
+export function resolveDemoConfig(env: Env): DemoConfig {
+  if (supabasePresent(env)) return { enabled: false, reason: "supabase-present" };
+  if (env.BROKO_DEMO_MODE !== "true") return { enabled: false, reason: "flag-off" };
+  const accessCode = env.BROKO_DEMO_ACCESS_CODE?.trim() || undefined;
+  const sessionSecret = env.BROKO_DEMO_SESSION_SECRET?.trim() || undefined;
+  if (looksLikeProduction(env)) {
+    if (env.BROKO_ALLOW_PRODUCTION_DEMO !== "true") return { enabled: false, reason: "production-not-allowed" };
+    if (!accessCode || accessCode.length < MIN_ACCESS_CODE_LENGTH) return { enabled: false, reason: "production-needs-access-code" };
+    if (!strongEnoughSecret(sessionSecret)) return { enabled: false, reason: "production-needs-session-secret" };
+  }
+  return { enabled: true, accessCode, sessionSecret };
+}
+
+export const supabaseConfigured = (): boolean => supabaseUsable(process.env);
+export const demoConfig = (): DemoConfig => resolveDemoConfig(process.env);
+export const demoMode = (): boolean => demoConfig().enabled;

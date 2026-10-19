@@ -39,5 +39,12 @@ export interface Backend {
   signOut(): Promise<void>;
   repoFor(user: Profile): Promise<Repo>;
   /** Only the demo backend provides this. */
-  demo?: { accounts: Profile[]; signInAs(id: string): Promise<boolean> };
+  demo?: {
+    accounts: Profile[];
+    /** True when an access code (server-side secret) must be entered to sign in. */
+    codeRequired: boolean;
+    signInAs(id: string, code: string): Promise<{ error?: string }>;
+    /** Discards this visitor's demo changes. */
+    reset(): Promise<void>;
+  };
 }
