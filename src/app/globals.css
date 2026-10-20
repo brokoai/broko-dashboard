@@ -37,3 +37,66 @@ body {
   outline: 2px solid var(--broko-red);
   outline-offset: 2px;
 }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Remove the 300ms tap delay and double-tap zoom on controls; subtle tap feedback. */
+a, button, summary, select, [role="tab"] {
+  touch-action: manipulation;
+}
+body {
+  -webkit-tap-highlight-color: rgb(220 10 37 / 0.12);
+}
+
+/* Horizontal page padding that also clears notches / rounded corners in landscape. */
+.safe-px {
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+@media (min-width: 640px) {
+  .safe-px {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
+@media (min-width: 1024px) {
+  .safe-px { padding-left: 1.5rem; padding-right: 1.5rem; }
+}
+
+/*
+ * Touch input (phones AND tablets, whatever the screen width): 16px form text so iOS/iPadOS don't
+ * zoom the page on focus, and 44px minimum tap targets. Mouse/trackpad layouts are unaffected.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea {
+    font-size: 16px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, button, summary, [role="tab"] {
+    min-height: 44px;
+  }
+  summary[aria-label] { min-width: 44px; }
+}
+
+/* Mobile navigation drawer motion (disabled below for reduced-motion users). */
+@keyframes drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: none; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.drawer-panel { animation: drawer-in 0.22s ease-out; }
+.drawer-backdrop { animation: fade-in 0.22s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

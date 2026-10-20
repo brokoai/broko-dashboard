@@ -5,23 +5,27 @@ import { initials } from "@/lib/dates";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
+// Controls are 44px tall on touch-sized screens and keep their compact desktop size from `sm` up.
 export const btn = {
-  base: "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none",
+  base: "inline-flex min-h-11 items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none sm:min-h-9",
   primary: "bg-brand text-white hover:bg-brand-dark px-3.5 py-2",
   secondary: "border border-line bg-surface text-fg hover:bg-page px-3.5 py-2",
   ghost: "text-muted hover:bg-page hover:text-fg p-2",
 };
 
+/** Text inputs / selects / textareas: 16px text on phones (prevents iOS zoom-on-focus), 44px tall. */
+export const field = "w-full min-h-11 rounded-md border border-line bg-surface px-3 py-2 text-base sm:min-h-0 sm:text-sm";
+
 export function Card({ title, action, children, className }: { title?: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cx("rounded-lg border border-line bg-surface shadow-card", className)}>
+    <section className={cx("min-w-0 rounded-lg border border-line bg-surface shadow-card", className)}>
       {title && (
-        <header className="flex items-center justify-between gap-3 px-5 pt-4">
-          <h2 className="text-base font-semibold text-ink">{title}</h2>
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-4 sm:px-5">
+          <h2 className="min-w-0 break-words text-base font-semibold text-ink">{title}</h2>
           {action}
         </header>
       )}
-      <div className="p-5">{children}</div>
+      <div className="p-4 sm:p-5">{children}</div>
     </section>
   );
 }
@@ -72,10 +76,10 @@ export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
 
 export function EmptyState({ icon, title, children, action }: { icon: ReactNode; title: string; children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center px-6 py-10 text-center">
+    <div className="flex flex-col items-center px-2 py-8 text-center sm:px-6 sm:py-10">
       <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-brand-soft text-brand">{icon}</div>
       <h3 className="text-sm font-semibold text-ink">{title}</h3>
-      <p className="mt-1 max-w-sm text-sm text-muted">{children}</p>
+      <p className="mt-1 max-w-sm break-words text-sm text-muted">{children}</p>
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -84,8 +88,8 @@ export function EmptyState({ icon, title, children, action }: { icon: ReactNode;
 export function PageTitle({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="mb-5">
-      <h1 className="text-2xl font-semibold tracking-tight text-ink">{title}</h1>
-      {children && <p className="mt-1 text-sm text-muted">{children}</p>}
+      <h1 className="break-words text-2xl font-semibold tracking-tight text-ink">{title}</h1>
+      {children && <p className="mt-1 break-words text-sm text-muted">{children}</p>}
     </div>
   );
 }

@@ -11,8 +11,8 @@ export default async function LoginPage() {
   if (await getCurrentUser()) redirect("/");
   const backend = await getBackend();
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-8 shadow-card">
+    <div className="flex min-h-dvh items-center justify-center px-4 py-8 sm:py-10">
+      <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-6 shadow-card sm:p-8">
         <Image src="/brand/broko-wordmark.jpeg" alt="Broko Realty Ltd" width={1600} height={639} priority className="mx-auto h-auto w-44 mix-blend-multiply" />
         <h1 className="mt-6 text-center text-lg font-semibold text-ink">{company.product}</h1>
         <p className="mb-6 text-center text-sm text-muted">{company.tagline}</p>

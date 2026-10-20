@@ -18,13 +18,14 @@ export default async function OverviewPage() {
     <>
       <BrandHeader />
       <KpiCards counts={counts} />
-      <div className="grid gap-4 xl:grid-cols-3">
-        <div className="xl:col-span-2"><TaskPanel tasks={tasks} people={people} user={user} compact title="Tasks" /></div>
-        <Card title="Activity" action={<Link href="/inbox" className="text-sm font-medium text-brand hover:underline">AI Inbox →</Link>}>
+      {/* grid-cols-1 + min-w-0: a one-column grid must be allowed to shrink below its widest child. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <div className="min-w-0 xl:col-span-2"><TaskPanel tasks={tasks} people={people} user={user} compact title="Tasks" /></div>
+        <Card title="Activity" action={<Link href="/inbox" className="inline-flex min-h-11 items-center text-sm font-medium text-brand hover:underline sm:min-h-0">AI Inbox →</Link>}>
           <ActivityFeed events={events} />
         </Card>
       </div>
-      <Card className="mt-4" title="Integrations" action={<Link href="/integrations" className="text-sm font-medium text-brand hover:underline">Manage →</Link>}>
+      <Card className="mt-4" title="Integrations" action={<Link href="/integrations" className="inline-flex min-h-11 items-center text-sm font-medium text-brand hover:underline sm:min-h-0">Manage →</Link>}>
         {connected === 0 && <p className="mb-3 text-sm text-muted">No integrations are connected yet. Each one stays “Pending Setup” until a real connection is verified.</p>}
         <IntegrationList items={integrations} />
       </Card>

@@ -6,7 +6,7 @@ import { btn, cx } from "@/components/ui";
 
 export function LoginForm() {
   const [state, action, pending] = useActionState<LoginState, FormData>(signInWithPassword, {});
-  const field = "mt-1 w-full rounded-md border border-line px-3 py-2 text-sm";
+  const field = "mt-1 w-full min-h-11 rounded-md border border-line px-3 py-2 text-base sm:min-h-0 sm:text-sm";
   return (
     <form action={action} className="space-y-4">
       {state.error && <p role="alert" className="rounded-md bg-brand-soft px-3 py-2 text-sm text-brand-dark">{state.error}</p>}

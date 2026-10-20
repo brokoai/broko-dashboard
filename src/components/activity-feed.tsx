@@ -27,11 +27,12 @@ export function ActivityFeed({ events, emptyTitle = "No activity yet", emptyText
           <li key={e.id} className="flex gap-3 py-3">
             <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-soft text-brand"><Icon size={16} aria-hidden /></span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm text-ink">{e.description}</p>
-              <p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
-                <time dateTime={e.created_at}>{timeAgo(e.created_at)}</time>
+              <p className="break-words text-sm text-ink">{e.description}</p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                <time dateTime={e.created_at} className="whitespace-nowrap">{timeAgo(e.created_at)}</time>
                 {e.related_task_id && e.related_task_title && (
-                  <Link href={`/tasks/${e.related_task_id}`} className="truncate text-brand hover:underline">{e.related_task_title}</Link>
+                  // Padding enlarges the tap area without changing the layout (offset by the negative margin).
+                  <Link href={`/tasks/${e.related_task_id}`} className="-my-3.5 inline-flex min-h-11 min-w-0 max-w-full items-center break-words text-brand hover:underline sm:-my-2 sm:min-h-0 sm:py-2">{e.related_task_title}</Link>
                 )}
                 <Badge tone={e.status === "failed" ? "red" : e.status === "pending" ? "amber" : "green"}>
                   {e.status === "processed" ? "Processed" : e.status === "pending" ? "Pending" : "Failed"}
