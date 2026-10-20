@@ -26,7 +26,6 @@ export const looksLikeProduction = (env: Env): boolean =>
   Boolean(env.AWS_EXECUTION_ENV) ||
   Boolean(env.AWS_LAMBDA_FUNCTION_NAME);
 
-export const MIN_ACCESS_CODE_LENGTH = 12;
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
 /** Cheap guard against obviously weak secrets (generate a real one with a CSPRNG; see docs/DEMO_MODE.md). */
@@ -35,34 +34,31 @@ export const strongEnoughSecret = (s: string | undefined): s is string =>
 
 export interface DemoConfig {
   enabled: boolean;
-  /** Shared access code users type. Server-side only; never used as key material on its own. */
-  accessCode?: string;
-  /** Random server-only secret that keys cookie signatures. Server-side only. */
+  /** Random server-only secret that keys the demo cookie signatures. Never sent to the browser. */
   sessionSecret?: string;
   /** Why demo is off (for logs/tests; never shown to users). */
   reason?: string;
 }
 
 /**
- * Demo mode = synthetic data, no real backend. Rules:
+ * Demo mode = synthetic data, no real backend, no password. Rules:
  *  - Impossible whenever any Supabase configuration is present.
  *  - Needs BROKO_DEMO_MODE=true.
- *  - Production-like environments additionally need ALL of: BROKO_ALLOW_PRODUCTION_DEMO=true,
- *    BROKO_DEMO_ACCESS_CODE (>= 12 chars) and BROKO_DEMO_SESSION_SECRET (>= 32 chars, random).
- *    Otherwise demo stays off.
+ *  - Production-like environments additionally need BROKO_ALLOW_PRODUCTION_DEMO=true AND a strong
+ *    BROKO_DEMO_SESSION_SECRET (>= 32 chars, random) so demo cookies cannot be forged. Otherwise
+ *    demo stays off.
  * Local development needs only BROKO_DEMO_MODE=true (a fixed, non-secret development key is used).
+ * BROKO_DEMO_ACCESS_CODE is no longer used; if it is still set, it is ignored.
  */
 export function resolveDemoConfig(env: Env): DemoConfig {
   if (supabasePresent(env)) return { enabled: false, reason: "supabase-present" };
   if (env.BROKO_DEMO_MODE !== "true") return { enabled: false, reason: "flag-off" };
-  const accessCode = env.BROKO_DEMO_ACCESS_CODE?.trim() || undefined;
   const sessionSecret = env.BROKO_DEMO_SESSION_SECRET?.trim() || undefined;
   if (looksLikeProduction(env)) {
     if (env.BROKO_ALLOW_PRODUCTION_DEMO !== "true") return { enabled: false, reason: "production-not-allowed" };
-    if (!accessCode || accessCode.length < MIN_ACCESS_CODE_LENGTH) return { enabled: false, reason: "production-needs-access-code" };
     if (!strongEnoughSecret(sessionSecret)) return { enabled: false, reason: "production-needs-session-secret" };
   }
-  return { enabled: true, accessCode, sessionSecret };
+  return { enabled: true, sessionSecret };
 }
 
 export const supabaseConfigured = (): boolean => supabaseUsable(process.env);

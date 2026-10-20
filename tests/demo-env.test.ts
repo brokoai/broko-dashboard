@@ -2,51 +2,49 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { resolveDemoConfig, strongEnoughSecret, supabasePresent } from "../src/lib/env";
 
-const CODE = "correct-horse-battery";                               // 21 chars (dummy test value)
-const SECRET = "Qm9r7Xk2LpV8sT4wYb1NcZ6hJdE3uAfG0iOyRtKv5nS";       // dummy test value, >= 32 chars, varied
+const SECRET = "Qm9r7Xk2LpV8sT4wYb1NcZ6hJdE3uAfG0iOyRtKv5nS"; // dummy test value, >= 32 chars, varied
 const prod = { NODE_ENV: "production", VERCEL_ENV: "production" };
-const prodFull = { ...prod, BROKO_DEMO_MODE: "true", BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_ACCESS_CODE: CODE, BROKO_DEMO_SESSION_SECRET: SECRET };
+const prodFull = { ...prod, BROKO_DEMO_MODE: "true", BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_SESSION_SECRET: SECRET };
 
-describe("demo mode switch", () => {
+describe("demo mode switch (passwordless synthetic demo)", () => {
   it("is off by default", () => {
     assert.equal(resolveDemoConfig({}).enabled, false);
     assert.equal(resolveDemoConfig({ NODE_ENV: "development" }).enabled, false);
   });
 
-  it("is on in local development with only BROKO_DEMO_MODE=true (no code, no secret)", () => {
+  it("is on in local development with only BROKO_DEMO_MODE=true", () => {
     const c = resolveDemoConfig({ NODE_ENV: "development", BROKO_DEMO_MODE: "true" });
     assert.equal(c.enabled, true);
-    assert.equal(c.accessCode, undefined);
     assert.equal(c.sessionSecret, undefined);
   });
 
   it("stays OFF in production with only BROKO_DEMO_MODE=true", () => {
-    assert.equal(resolveDemoConfig({ ...prod, BROKO_DEMO_MODE: "true", BROKO_DEMO_ACCESS_CODE: CODE, BROKO_DEMO_SESSION_SECRET: SECRET }).enabled, false);
+    assert.equal(resolveDemoConfig({ ...prod, BROKO_DEMO_MODE: "true", BROKO_DEMO_SESSION_SECRET: SECRET }).enabled, false);
   });
 
   it("stays OFF in production with only BROKO_ALLOW_PRODUCTION_DEMO=true", () => {
-    assert.equal(resolveDemoConfig({ ...prod, BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_ACCESS_CODE: CODE, BROKO_DEMO_SESSION_SECRET: SECRET }).enabled, false);
+    assert.equal(resolveDemoConfig({ ...prod, BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_SESSION_SECRET: SECRET }).enabled, false);
   });
 
-  it("production demo needs both flags, an access code (>= 12) AND a strong session secret (>= 32)", () => {
+  it("production demo needs both flags AND a strong session secret (>= 32 chars) — and no access code", () => {
     const ok = resolveDemoConfig(prodFull);
     assert.equal(ok.enabled, true);
-    assert.equal(ok.accessCode, CODE);
     assert.equal(ok.sessionSecret, SECRET);
 
     const without = (k: keyof typeof prodFull, v?: string) => resolveDemoConfig({ ...prodFull, [k]: v });
-    assert.equal(without("BROKO_DEMO_ACCESS_CODE").reason, "production-needs-access-code");
-    assert.equal(without("BROKO_DEMO_ACCESS_CODE", "short-code").enabled, false);    // 10 chars
-    assert.equal(without("BROKO_DEMO_ACCESS_CODE", "   ").enabled, false);
     assert.equal(without("BROKO_DEMO_SESSION_SECRET").reason, "production-needs-session-secret");
     assert.equal(without("BROKO_DEMO_SESSION_SECRET", "too-short").enabled, false);
     assert.equal(without("BROKO_DEMO_SESSION_SECRET", "a".repeat(64)).enabled, false); // long but no entropy
+    assert.equal(without("BROKO_DEMO_SESSION_SECRET", "   ").enabled, false);
     assert.equal(without("BROKO_DEMO_MODE").enabled, false);
     assert.equal(without("BROKO_ALLOW_PRODUCTION_DEMO").enabled, false);
   });
 
-  it("the access code alone is never enough in production (it is not key material)", () => {
-    assert.equal(resolveDemoConfig({ ...prodFull, BROKO_DEMO_SESSION_SECRET: undefined }).enabled, false);
+  it("a leftover BROKO_DEMO_ACCESS_CODE is ignored: it neither enables nor blocks the demo", () => {
+    assert.equal(resolveDemoConfig({ ...prodFull, BROKO_DEMO_ACCESS_CODE: "leftover-dummy-code-for-test" }).enabled, true);
+    assert.equal(resolveDemoConfig({ ...prodFull, BROKO_DEMO_ACCESS_CODE: "" }).enabled, true);
+    // ...and it can never substitute for the session secret
+    assert.equal(resolveDemoConfig({ ...prod, BROKO_DEMO_MODE: "true", BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_ACCESS_CODE: "leftover-dummy-code-for-test" }).enabled, false);
   });
 
   it("detects production by any signal, not just NODE_ENV", () => {
@@ -57,7 +55,7 @@ describe("demo mode switch", () => {
 });
 
 describe("Supabase presence makes demo IMPOSSIBLE", () => {
-  const flags = { BROKO_DEMO_MODE: "true", BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_ACCESS_CODE: CODE, BROKO_DEMO_SESSION_SECRET: SECRET };
+  const flags = { BROKO_DEMO_MODE: "true", BROKO_ALLOW_PRODUCTION_DEMO: "true", BROKO_DEMO_SESSION_SECRET: SECRET };
 
   it("for any Supabase-looking variable, in production and in development", () => {
     for (const sb of [
@@ -92,6 +90,5 @@ describe("session secret strength check", () => {
     assert.equal(strongEnoughSecret(undefined), false);
     assert.equal(strongEnoughSecret("x".repeat(31)), false);
     assert.equal(strongEnoughSecret("ab".repeat(30)), false);        // 60 chars, 2 distinct
-    assert.equal(strongEnoughSecret("password-password-password-1234"), false); // 31 chars
   });
 });

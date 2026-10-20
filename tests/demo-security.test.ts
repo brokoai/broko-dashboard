@@ -1,24 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { codesMatch, createSessionToken, deriveKey, readSessionToken, sign, verify } from "../src/lib/backend/demo/crypto";
-import { createRateLimiter } from "../src/lib/backend/demo/rate-limit";
+import { createSessionToken, deriveKey, readSessionToken, sign, verify } from "../src/lib/backend/demo/crypto";
 import {
   decodeState, emptyState, encodeState, encodedSize, LIMITS, materialize, toTuple, type DemoState,
 } from "../src/lib/backend/demo/state";
 
 const SECRET = "Qm9r7Xk2LpV8sT4wYb1NcZ6hJdE3uAfG0iOyRtKv5nS"; // dummy test value
-const mat = { secret: SECRET, code: "a-demo-access-code", allowDevFallback: false };
+const mat = { secret: SECRET, allowDevFallback: false };
 const key = deriveKey(mat, "session");
 const NOW = Date.UTC(2026, 9, 12, 10, 0, 0);
-
-describe("access code", () => {
-  it("matches only the exact code", () => {
-    assert.equal(codesMatch("a-demo-access-code", "a-demo-access-code"), true);
-    assert.equal(codesMatch("a-demo-access-cod", "a-demo-access-code"), false);
-    assert.equal(codesMatch("", "a-demo-access-code"), false);
-    assert.equal(codesMatch("A-DEMO-ACCESS-CODE", "a-demo-access-code"), false);
-  });
-});
 
 describe("signed demo session", () => {
   it("round-trips a valid session", () => {
@@ -36,9 +26,8 @@ describe("signed demo session", () => {
     assert.equal(readSessionToken("demo-admin", key, NOW), null);                    // old cookie format
     assert.equal(readSessionToken("", key, NOW), null);
     assert.equal(readSessionToken(undefined, key, NOW), null);
-    assert.equal(readSessionToken(t, deriveKey({ ...mat, code: "different-code" }, "session"), NOW), null); // changing the code invalidates sessions
-    assert.equal(readSessionToken(t, deriveKey({ ...mat, secret: "A".repeat(10) + SECRET }, "session"), NOW), null);
-    assert.equal(readSessionToken(t, deriveKey(mat, "state"), NOW), null); // purposes are separated
+    assert.equal(readSessionToken(t, deriveKey({ ...mat, secret: "A".repeat(10) + SECRET }, "session"), NOW), null); // other secret
+    assert.equal(readSessionToken(t, deriveKey(mat, "state"), NOW), null);           // purposes are separated
   });
   it("sign/verify is symmetric and key-bound", () => {
     assert.equal(verify(sign("hello", key), key), "hello");
@@ -46,20 +35,20 @@ describe("signed demo session", () => {
   });
 });
 
-describe("rate limiter", () => {
-  it("blocks after max failures, then recovers after the window", () => {
-    const rl = createRateLimiter({ max: 3, windowMs: 1000 });
-    for (let i = 0; i < 3; i++) { assert.equal(rl.check("ip", 0).allowed, true); rl.fail("ip", 0); }
-    assert.equal(rl.check("ip", 500).allowed, false);
-    assert.equal(rl.check("other", 500).allowed, true);
-    assert.equal(rl.check("ip", 1001).allowed, true);
+describe("key derivation", () => {
+  it("refuses to run without a secret when the dev fallback is not allowed (production-like)", () => {
+    assert.throws(() => deriveKey({ allowDevFallback: false }, "session"), /secret is required/);
   });
-  it("clear() resets a key and memory stays bounded", () => {
-    const rl = createRateLimiter({ max: 1, windowMs: 1000, maxKeys: 10 });
-    rl.fail("a", 0); assert.equal(rl.check("a", 1).allowed, false);
-    rl.clear("a"); assert.equal(rl.check("a", 1).allowed, true);
-    for (let i = 0; i < 100; i++) rl.fail(`k${i}`, 0);
-    assert.ok(true); // would throw/OOM if unbounded growth logic were broken
+  it("uses a distinct key per purpose and produces 32 bytes", () => {
+    const s = deriveKey(mat, "session"), t = deriveKey(mat, "state");
+    assert.equal(s.length, 32);
+    assert.notDeepEqual(s, t);
+  });
+  it("a different secret gives a different key", () => {
+    assert.notDeepEqual(deriveKey(mat, "session"), deriveKey({ ...mat, secret: "Z".repeat(8) + SECRET }, "session"));
+  });
+  it("development fallback works only when explicitly allowed", () => {
+    assert.equal(deriveKey({ allowDevFallback: true }, "session").length, 32);
   });
 });
 
@@ -92,26 +81,7 @@ describe("browser-local state: validation and bounds", () => {
       e: Array.from({ length: LIMITS.events }, (_, i) => [3, `n${String(i).padStart(10, "0")}`, 1_900_000_000, 2, 2, 3]),
     };
     assert.ok(encodedSize(s) <= LIMITS.maxEncodedBytes, `payload ${encodedSize(s)}B`);
-    const cookie = `broko_demo_state=${sign(encodeState(s), deriveKey({ secret: SECRET, code: "c", allowDevFallback: false }, "state"))}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400`;
+    const cookie = `broko_demo_state=${sign(encodeState(s), deriveKey({ secret: SECRET, allowDevFallback: false }, "state"))}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400`;
     assert.ok(Buffer.byteLength(cookie) < 4096, `cookie ${Buffer.byteLength(cookie)}B`);
-  });
-});
-
-describe("key derivation", () => {
-  it("does not depend on the access code alone: same code + different secret => different key", () => {
-    const a = deriveKey({ secret: SECRET, code: "same-code-123456", allowDevFallback: false }, "session");
-    const b = deriveKey({ secret: "Z".repeat(8) + SECRET, code: "same-code-123456", allowDevFallback: false }, "session");
-    assert.notDeepEqual(a, b);
-  });
-  it("refuses to run without a secret when the dev fallback is not allowed (production-like)", () => {
-    assert.throws(() => deriveKey({ code: "some-long-access-code", allowDevFallback: false }, "session"), /secret is required/);
-  });
-  it("uses a distinct key per purpose and produces 32 bytes", () => {
-    const s = deriveKey(mat, "session"), t = deriveKey(mat, "state");
-    assert.equal(s.length, 32);
-    assert.notDeepEqual(s, t);
-  });
-  it("development fallback works only when explicitly allowed", () => {
-    assert.equal(deriveKey({ allowDevFallback: true }, "session").length, 32);
   });
 });

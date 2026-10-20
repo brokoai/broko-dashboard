@@ -16,11 +16,11 @@ export async function signInWithPassword(_prev: LoginState, form: FormData): Pro
   redirect("/");
 }
 
-/** Demo entry point. The access code is validated here, on the server, never in the browser. */
+/** Demo entry point: open sign-in as a placeholder account (synthetic data only, no password). */
 export async function signInAsDemo(_prev: LoginState, form: FormData): Promise<LoginState> {
   const demo = (await getBackend()).demo; // undefined unless demo mode is enabled
   if (!demo) redirect("/login");
-  const { error } = await demo.signInAs(String(form.get("user") ?? ""), String(form.get("code") ?? ""));
+  const { error } = await demo.signInAs(String(form.get("user") ?? ""));
   if (error) return { error };
   redirect("/");
 }

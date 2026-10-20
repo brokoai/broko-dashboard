@@ -18,9 +18,8 @@ export default async function LoginPage() {
         <p className="mb-6 text-center text-sm text-muted">{company.tagline}</p>
 
         {backend.kind === "demo" && backend.demo ? (
-          // Only names and role labels reach the browser; the access code never does.
+          // Only names and role labels reach the browser.
           <DemoLoginForm
-            codeRequired={backend.demo.codeRequired}
             accounts={backend.demo.accounts.map((u) => ({ id: u.id, name: u.full_name, roleLabel: ROLE_LABEL[u.role] }))}
           />
         ) : backend.kind === "unconfigured" ? (

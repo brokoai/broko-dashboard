@@ -41,9 +41,8 @@ export interface Backend {
   /** Only the demo backend provides this. */
   demo?: {
     accounts: Profile[];
-    /** True when an access code (server-side secret) must be entered to sign in. */
-    codeRequired: boolean;
-    signInAs(id: string, code: string): Promise<{ error?: string }>;
+    /** Open sign-in as a placeholder account (synthetic data only; no password). */
+    signInAs(id: string): Promise<{ error?: string }>;
     /** Discards this visitor's demo changes. */
     reset(): Promise<void>;
   };
