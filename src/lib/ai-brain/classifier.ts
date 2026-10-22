@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { MessageAnalysisSchema, type Intent, type NormalizedMessage } from "./schema";
+import { MessageAnalysisSchema, type ClassifierInfo, type Intent, type NormalizedMessage } from "./schema";
 
 /**
  * A classifier returns UNTRUSTED data (`unknown`). The pipeline validates it against
@@ -8,7 +8,16 @@ import { MessageAnalysisSchema, type Intent, type NormalizedMessage } from "./sc
  */
 export interface Classifier {
   readonly name: string;
+  /** Defaults to "rules". The pipeline records it, so the dashboard can always say what produced an analysis. */
+  readonly mode?: ClassifierInfo["mode"];
   analyze(msg: NormalizedMessage): Promise<unknown>;
+  /** Optional richer result (e.g. a wrapper that fell back to rules). */
+  analyzeDetailed?(msg: NormalizedMessage): Promise<{ analysis: unknown; info: ClassifierInfo }>;
+}
+
+export async function classifyWithInfo(c: Classifier, msg: NormalizedMessage): Promise<{ analysis: unknown; info: ClassifierInfo }> {
+  if (c.analyzeDetailed) return c.analyzeDetailed(msg);
+  return { analysis: await c.analyze(msg), info: { name: c.name, mode: c.mode ?? "rules", fallback_reason: null } };
 }
 
 export class ClassificationError extends Error {
@@ -169,6 +178,7 @@ export function extractJson(text: string): unknown {
 
 export class LlmClassifier implements Classifier {
   readonly name: string;
+  readonly mode = "llm" as const;
   constructor(private readonly transport: LlmTransport, label = "llm") { this.name = label; }
 
   async analyze(msg: NormalizedMessage): Promise<unknown> {

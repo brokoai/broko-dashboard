@@ -90,6 +90,7 @@ function MessageCard({ m, people, nameOf }: { m: ProcessedMessage; people: Perso
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone="dark">Synthetic</Badge>
+          {m.classifier?.fallback_reason && <Badge tone="amber">{m.classifier.fallback_reason === "model_unavailable" ? "Rule-based (model unavailable)" : "Rule-based (model output rejected)"}</Badge>}
           <Badge tone={st.tone}>{st.label}</Badge>
           {m.proposed_priority && <PriorityBadge priority={m.proposed_priority} />}
         </div>

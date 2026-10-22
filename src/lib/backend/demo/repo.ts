@@ -6,6 +6,7 @@ import type {
 } from "@/lib/types";
 import { INTEGRATION_ORDER } from "@/lib/types";
 import { UserFacingError, type Repo } from "../types";
+import type { ClassifierSelection } from "@/lib/ai-brain";
 import { createDemoAiInbox } from "./ai-inbox";
 import {
   aiIndexOf, aiTaskId, decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
@@ -30,7 +31,7 @@ const FULL = "Demo storage is full. Use “Reset demo” to start over.";
 const nameOf = (id: string | null) => DEMO_USERS.find((u) => u.id === id)?.full_name ?? null;
 
 /** DEMO BACKEND ONLY: synthetic data, per-visitor, bounded. Never connects to anything real. */
-export function createDemoRepo(user: Profile, store: StateStore, now: () => number = Date.now): Repo {
+export function createDemoRepo(user: Profile, store: StateStore, now: () => number = Date.now, opts: { classifier?: ClassifierSelection } = {}): Repo {
   const admin = user.role === "admin";
   const visible = (t: Task) => admin || t.assigned_to === user.id || t.created_by === user.id;
   const load = async () => decodeState(await store.read());
@@ -91,7 +92,7 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
       if (!s.r.includes(index)) s.r.push(index);
       await save(s);
     },
-  });
+  }, opts.classifier);
 
   return {
     aiInbox,

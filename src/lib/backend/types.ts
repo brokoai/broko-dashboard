@@ -23,6 +23,8 @@ export interface AiInboxView {
   messages: ProcessedMessage[];
   /** Messages seen again and suppressed (idempotency). */
   duplicates_suppressed: number;
+  /** Which classifier is active, stated explicitly. `note` explains a requested mode that could not be honoured. */
+  classifier: { mode: "rules" | "llm"; model: string | null; note: string | null };
 }
 
 /**

@@ -1,7 +1,7 @@
 import {
-  DEFAULT_POLICY, DUPLICATE_OF_VIEWING, InMemoryAuditSink, InMemoryProcessingStore, RuleBasedClassifier, SYNTHETIC_EMAILS, SYNTHETIC_NOW,
+  DEFAULT_POLICY, DUPLICATE_OF_VIEWING, InMemoryAuditSink, InMemoryProcessingStore, SYNTHETIC_EMAILS, SYNTHETIC_NOW, rulesSelection,
   TaskSinkDenied, parseOwnerRules, processMessage, reviewMessage,
-  type PipelineDeps, type ProcessedMessage, type RawEmail, type ReviewDecision, type TaskSink,
+  type ClassifierSelection, type PipelineDeps, type ProcessedMessage, type RawEmail, type ReviewDecision, type TaskSink,
 } from "@/lib/ai-brain";
 import { checkTaskChange } from "@/lib/permissions";
 import type { Profile, TaskInput } from "@/lib/types";
@@ -45,7 +45,7 @@ export interface DemoAiHost {
 
 const clipTo = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-export function createDemoAiInbox(host: DemoAiHost): AiInboxRepo {
+export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelection = rulesSelection()): AiInboxRepo {
   const { user } = host;
   const requireAdmin = () => {
     if (user.role !== "admin") throw new UserFacingError("Only administrators can use the AI Inbox.");
@@ -70,16 +70,21 @@ export function createDemoAiInbox(host: DemoAiHost): AiInboxRepo {
       },
     };
     const deps: PipelineDeps = {
-      classifier: new RuleBasedClassifier(), store, audit: new InMemoryAuditSink(), taskSink: sink,
+      classifier: selection.classifier, store, audit: new InMemoryAuditSink(), taskSink: sink,
       ownerRules: DEMO_OWNER_RULES, assignable: new Set(DEMO_USERS.map((u) => u.id)), policy: DEFAULT_POLICY, now: () => SYNTHETIC_NOW,
     };
-    const keys: (string | null)[] = [];
+    // Messages 0..n-2 are independent, so they run concurrently (model calls are slow). The last one is the
+    // duplicate delivery and must run AFTER its original so the original keeps the key at its own index.
+    const keys: (string | null)[] = new Array(DEMO_FIXTURES.length).fill(null);
     let duplicates = 0;
-    for (const raw of DEMO_FIXTURES) {
-      const r = await processMessage(deps, raw);
+    const run = async (i: number) => {
+      const r = await processMessage(deps, DEMO_FIXTURES[i]);
       if (r.outcome === "duplicate") duplicates++;
-      keys.push(r.outcome === "duplicate" ? null : r.record?.dedupe_key ?? null);
-    }
+      else keys[i] = r.record?.dedupe_key ?? null;
+    };
+    const last = DEMO_FIXTURES.length - 1;
+    await Promise.all(Array.from({ length: last }, (_, i) => run(i)));
+    await run(last);
     // Overlay this visitor's decisions.
     for (const [index, taskId] of await host.approved()) {
       const key = keys[index];
@@ -97,9 +102,14 @@ export function createDemoAiInbox(host: DemoAiHost): AiInboxRepo {
       requireAdmin();
       const { store, duplicates } = await build();
       const messages: ProcessedMessage[] = await store.list(100);
-      return { mode: "synthetic", messages, duplicates_suppressed: duplicates };
+      return {
+        mode: "synthetic", messages, duplicates_suppressed: duplicates,
+        classifier: { mode: selection.mode, model: selection.model, note: selection.note },
+      };
     },
     async review(dedupeKey, input: AiReviewInput) {
+      // Authorize BEFORE building: a non-admin must not be able to trigger (paid) classification.
+      if (user.role !== "admin") return { ok: false, error: "forbidden", message: "Only administrators can review AI-proposed tasks." };
       const { deps, keys } = await build();
       const decision: ReviewDecision = input.action === "reject"
         ? { action: "reject", by: user }

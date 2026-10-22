@@ -6,9 +6,10 @@ export { groundAnalysis } from "./grounding";
 export { parseOwnerRules, resolveOwner } from "./owners";
 export { assessPriority, assessRisk, decide, proposeDeadline } from "./policy";
 export {
-  ClassificationError, LlmClassifier, LlmError, RuleBasedClassifier, SYSTEM_PROMPT, anthropicTransport, buildUserPrompt, extractJson,
+  ClassificationError, LlmClassifier, LlmError, RuleBasedClassifier, SYSTEM_PROMPT, anthropicTransport, buildUserPrompt, extractJson, classifyWithInfo,
   type Classifier, type LlmRequest, type LlmTransport,
 } from "./classifier";
+export { CachingClassifier, FallbackClassifier, rulesSelection, selectClassifier, type ClassifierSelection } from "./classifier-select";
 export { buildTaskInput, sourceRef } from "./task-mapping";
 export { loadAiBrainConfig, DEFAULT_MODEL, type AiBrainConfig } from "./config";
 export type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, ProviderConnection, TaskActor, TaskSink, TaskSinkContext } from "./ports";

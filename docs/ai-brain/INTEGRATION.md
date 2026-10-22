@@ -72,3 +72,17 @@ and the notification state ("not configured", never claimed as sent).
 3. **Ownership of GitHub and hosting:** the repo is under a personal GitHub account and is public; Vercel is Hobby. Who owns and administers the production accounts, and when do they move to organisation control?
 4. **Ownership rules:** who gets viewings, finance, legal, complaints, and what is the fallback? Which sender domains are verified?
 5. **Notifications:** where should they go (in-app only, email, Teams, other)?
+
+## Classifier modes (model integration, stage 3)
+
+`BROKO_AI_CLASSIFIER` = `rules` (default) or `llm`. `llm` also needs `ANTHROPIC_API_KEY`; without it the inbox uses the rules
+and shows a note. The active mode is always shown on the AI Inbox page, and each message records which classifier produced it.
+
+* **Where it is chosen:** `selectClassifier()` (`src/lib/ai-brain/classifier-select.ts`), once per server process, from server-side env only.
+* **Fallback:** model unreachable, non-JSON, or schema-invalid output (including attempts to name an owner or approve) -> the rule-based
+  classifier, recorded as `model_unavailable` / `model_output_invalid` and shown as a badge. After an outage the model is skipped for 60 s.
+* **Unchanged:** strict validation, grounding, injection tripwire, owner rules, role checks, duplicate suppression, human approval.
+* **Cost control:** results are cached per message content (10 min; 60 s for fallbacks, 64 entries), the duplicate delivery is never
+  classified, and non-admins cannot trigger classification. A public demo with `llm` enabled would still cost at most ~9 calls per 10 minutes per server instance; leave it `rules` there.
+* **Latency:** first page load in model mode took ~9 s in development (nine calls in parallel); cached loads ~150 ms. A persistent store
+  with background processing (next stage) removes this from the request path.

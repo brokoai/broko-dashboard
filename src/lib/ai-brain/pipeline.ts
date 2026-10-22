@@ -1,6 +1,6 @@
 import { checkTaskChange } from "@/lib/permissions";
 import type { Profile } from "@/lib/types";
-import { ClassificationError, LlmError, type Classifier } from "./classifier";
+import { ClassificationError, LlmError, classifyWithInfo, type Classifier } from "./classifier";
 import { groundAnalysis } from "./grounding";
 import { scanForInjection } from "./injection";
 import { dedupeKey, NormalizationError, normalizeEmail } from "./normalize";
@@ -9,7 +9,7 @@ import type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, T
 import { TaskSinkDenied } from "./ports";
 import { assessPriority, assessRisk, decide, proposeDeadline } from "./policy";
 import {
-  MessageAnalysisSchema, type OwnerRule, type PipelineStage, type ProcessedMessage, type ProcessingPolicy, type RawEmail,
+  MessageAnalysisSchema, type ClassifierInfo, type OwnerRule, type PipelineStage, type ProcessedMessage, type ProcessingPolicy, type RawEmail,
 } from "./schema";
 import { buildTaskInput, type TaskOverrides } from "./task-mapping";
 
@@ -85,7 +85,7 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
     internet_message_id: message.internet_message_id, mailbox_ref: message.mailbox_ref, received_at: message.received_at,
     sender_name: message.sender.name, sender_email: message.sender.email, subject: message.subject,
     excerpt: deps.policy.retain_excerpt_chars > 0 ? message.body_text.slice(0, deps.policy.retain_excerpt_chars) : null,
-    status: "PROCESSING", analysis: null, grounding_notes: [], risk_flags: [],
+    status: "PROCESSING", analysis: null, classifier: null, grounding_notes: [], risk_flags: [],
     owner: { user_id: null, rule_id: null, reason: "not yet resolved" }, review_reasons: [],
     proposed_priority: null, proposed_due_at: null, task_id: null,
     notification: { attempted: false, sent: false, detail: "no notification attempted" },
@@ -113,9 +113,12 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
 
   // CLASSIFY (untrusted output) ------------------------------------------------------------
   let rawAnalysis: unknown;
+  let classifierInfo: ClassifierInfo;
   try {
-    rawAnalysis = await deps.classifier.analyze(message);
-    stages.push({ stage: "classify", ok: true, detail: deps.classifier.name });
+    const out = await classifyWithInfo(deps.classifier, message);
+    rawAnalysis = out.analysis;
+    classifierInfo = out.info;
+    stages.push({ stage: "classify", ok: true, detail: out.info.fallback_reason ? `${out.info.name} (fallback: ${out.info.fallback_reason})` : out.info.name });
   } catch (e) {
     return fail("classify", e);
   }
@@ -148,7 +151,7 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
   stages.push({ stage: "decide", ok: true, detail: decision.status });
 
   let record = await deps.store.update(key, {
-    analysis, grounding_notes: grounded.notes.slice(0, 20), risk_flags: flags, owner, review_reasons: decision.reasons.slice(0, 12),
+    analysis, classifier: classifierInfo, grounding_notes: grounded.notes.slice(0, 20), risk_flags: flags, owner, review_reasons: decision.reasons.slice(0, 12),
     proposed_priority: analysis.requires_action ? priority : null, proposed_due_at: analysis.requires_action ? deadline.due_at : null,
     status: decision.status,
   });

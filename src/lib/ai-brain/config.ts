@@ -2,6 +2,8 @@ import { DEFAULT_POLICY, ProcessingPolicySchema, type OwnerRule, type Processing
 import { parseOwnerRules } from "./owners";
 
 export interface AiBrainConfig {
+  /** Requested mode. "llm" still falls back to rules (explicitly) when no key is configured. Default: rules. */
+  classifier: "rules" | "llm";
   llm: { configured: boolean; model: string };
   policy: ProcessingPolicy;
   ownerRules: OwnerRule[];
@@ -51,7 +53,11 @@ export function loadAiBrainConfig(env: Record<string, string | undefined>): AiBr
   }
 
   const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
-  const cfg: AiBrainConfig = { llm: { configured: Boolean(apiKey), model: env.BROKO_AI_MODEL?.trim() || DEFAULT_MODEL }, policy, ownerRules, problems };
+  const requested = env.BROKO_AI_CLASSIFIER?.trim().toLowerCase();
+  let classifier: AiBrainConfig["classifier"] = "rules";
+  if (requested === "llm") classifier = "llm";
+  else if (requested && requested !== "rules") problems.push("BROKO_AI_CLASSIFIER is invalid; using the rule-based classifier");
+  const cfg: AiBrainConfig = { classifier, llm: { configured: Boolean(apiKey), model: env.BROKO_AI_MODEL?.trim() || DEFAULT_MODEL }, policy, ownerRules, problems };
   Object.defineProperty(cfg, "apiKey", { value: apiKey, enumerable: false });
   return cfg;
 }

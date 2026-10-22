@@ -203,6 +203,16 @@ export const OwnerDecisionSchema = z.strictObject({
 export type OwnerDecision = z.infer<typeof OwnerDecisionSchema>;
 
 /** One row per message: reference, job state, AI result, owner, decision, outcome. */
+export const CLASSIFIER_MODES = ["rules", "llm"] as const;
+export const FALLBACK_REASONS = ["model_output_invalid", "model_unavailable"] as const;
+/** Which classifier produced an analysis, and whether the model was bypassed. Never contains prompts, keys or email text. */
+export const ClassifierInfoSchema = z.strictObject({
+  name: z.string().min(1).max(80),
+  mode: z.enum(CLASSIFIER_MODES),
+  fallback_reason: z.enum(FALLBACK_REASONS).nullable(),
+});
+export type ClassifierInfo = z.infer<typeof ClassifierInfoSchema>;
+
 export const ProcessedMessageSchema = z.strictObject({
   dedupe_key: z.string().min(1).max(700),
   provider: z.enum(SOURCE_PROVIDERS),
@@ -216,6 +226,7 @@ export const ProcessedMessageSchema = z.strictObject({
   excerpt: z.string().max(500).nullable(),
   status: ProcessingStatusSchema,
   analysis: MessageAnalysisSchema.nullable(),
+  classifier: ClassifierInfoSchema.nullable(),
   /** What the grounding step changed or dropped (no message content). */
   grounding_notes: z.array(z.string().max(200)).max(20),
   risk_flags: z.array(RiskFlagSchema).max(12),

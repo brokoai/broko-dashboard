@@ -4,6 +4,7 @@ import { demoConfig, looksLikeProduction } from "@/lib/env";
 import { DEMO_COOKIE, DEMO_STATE_COOKIE } from "../constants";
 import type { Backend } from "../types";
 import { createSessionToken, deriveKey, readSessionToken, sign, verify, SESSION_TTL_SECONDS, type KeyPurpose } from "./crypto";
+import { loadAiBrainConfig, selectClassifier, type ClassifierSelection } from "@/lib/ai-brain";
 import { createDemoRepo, DEMO_USERS, type StateStore } from "./repo";
 
 /**
@@ -43,6 +44,14 @@ function stateStore(): StateStore {
   };
 }
 
+/**
+ * Chosen once per server process from server-side environment variables (never NEXT_PUBLIC_). Rule-based
+ * by default; the model is used only with BROKO_AI_CLASSIFIER=llm AND ANTHROPIC_API_KEY. Kept at module
+ * level so the result cache and the outage cooldown survive across requests.
+ */
+let classifierSelection: ClassifierSelection | undefined;
+const demoClassifier = (): ClassifierSelection => (classifierSelection ??= selectClassifier(loadAiBrainConfig(process.env)));
+
 export const demoBackend: Backend = {
   kind: "demo",
   async getCurrentUser() {
@@ -56,7 +65,7 @@ export const demoBackend: Backend = {
     await expire(DEMO_COOKIE);
   },
   async repoFor(user) {
-    return createDemoRepo(user, stateStore());
+    return createDemoRepo(user, stateStore(), Date.now, { classifier: demoClassifier() });
   },
   demo: {
     accounts: DEMO_USERS,

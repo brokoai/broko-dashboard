@@ -55,6 +55,14 @@ export default async function InboxPage() {
           <p className="mt-1">No Outlook or Gmail account is connected and nothing was fetched. These sample emails run through the same analysis and approval flow so you can see how it will work. No reply is ever sent to a sender.</p>
         </div>
       )}
+      <p className="mb-4 text-sm text-fg" data-testid="classifier-mode">
+        <span className="font-medium">Classifier:</span>{" "}
+        {view.classifier.mode === "llm"
+          ? `AI model (${view.classifier.model}), with automatic fallback to the rule-based classifier if the model is unavailable or returns invalid output.`
+          : "Rule-based (deterministic keyword rules). No AI model is being called."}
+        {view.classifier.note && <span className="block text-muted">{view.classifier.note}</span>}
+        <span className="block text-muted">In both modes the model never chooses owners or approvals, and a person approves every task.</span>
+      </p>
       <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
         {stats.map(([label, n]) => (
           <div key={label} className="rounded-lg border border-line bg-surface p-3 shadow-card">
