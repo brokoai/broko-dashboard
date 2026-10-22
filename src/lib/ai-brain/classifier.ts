@@ -132,7 +132,7 @@ EXTRACTION RULES:
 - Use ONLY facts stated in the email. If something is not stated use null (or an empty list). Never guess names, phone numbers, property references or dates.
 - requested_date: only when the email itself states a specific calendar date; copy the exact words into "evidence".
 - urgency: "high" or "urgent" only when the email's own words say so; copy those words into urgency_evidence. Otherwise "normal" or "low".
-- List what is missing for the request to be actioned in missing_information and give a short question a human could send in clarification_question.
+- List what is missing for the request to be actioned in missing_information and give a short question a human could send in clarification_question. missing_information and risk_flags accept ONLY the exact values listed in the schema; if none fits, leave them out of the list. Never invent a new value.
 - Evidence must be quoted verbatim from the email.
 - Keep summary factual and short. Do not explain your reasoning.
 
@@ -174,7 +174,7 @@ export class LlmClassifier implements Classifier {
   async analyze(msg: NormalizedMessage): Promise<unknown> {
     let text: string;
     try {
-      text = await this.transport({ system: SYSTEM_PROMPT, user: buildUserPrompt(msg), maxTokens: 900 });
+      text = await this.transport({ system: SYSTEM_PROMPT, user: buildUserPrompt(msg), maxTokens: 4000 });
     } catch (e) {
       throw e instanceof LlmError ? e : new LlmError("the language-model request failed");
     }
