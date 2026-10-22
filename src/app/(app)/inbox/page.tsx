@@ -40,7 +40,8 @@ export default async function InboxPage() {
     );
   }
 
-  const [view, people] = await Promise.all([repo.aiInbox.view(), repo.listPeople()]);
+  const [view, people, activity] = await Promise.all([repo.aiInbox.view(), repo.listPeople(), repo.listActivity(200)]);
+  const aiActivity = activity.filter((e) => e.metadata).slice(0, 20);
   const count = (...s: string[]) => view.messages.filter((m) => s.includes(m.status)).length;
   const stats = [
     ["Needs review", count("REVIEW_REQUIRED")], ["Tasks created", count("TASK_CREATED", "NOTIFICATION_SENT")],
@@ -74,6 +75,12 @@ export default async function InboxPage() {
       {view.messages.length === 0 ? (
         <Card><EmptyState icon={<Inbox size={22} />} title="Nothing to review">No messages have been processed.</EmptyState></Card>
       ) : <AiInboxList messages={view.messages} people={people} />}
+      <Card title="AI activity" className="mt-4">
+        <p className="mb-3 text-sm text-muted">
+          What the AI workflow did, without email content. {view.mode === "synthetic" && "These events are regenerated from the synthetic sample emails on every visit; your approvals and rejections are remembered in this browser for up to 24 hours and are not stored in a database."}
+        </p>
+        <ActivityFeed events={aiActivity} emptyTitle="No AI activity yet" emptyText="Events appear as messages are processed." />
+      </Card>
     </>
   );
 }

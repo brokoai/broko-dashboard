@@ -55,6 +55,20 @@ export interface TaskInput {
   due_at: string | null;
 }
 
+/** Typed, content-free detail attached to AI workflow events. Never holds message content, addresses, ids of emails or error text. */
+export interface ActivityMetadata {
+  /** Hashed, non-reversible reference to one email's workflow (not the Message-ID). */
+  workflow_id: string | null;
+  classifier_mode: "rules" | "llm" | null;
+  fallback_reason: "model_output_invalid" | "model_unavailable" | null;
+  intent: string | null;
+  outcome: string | null;
+  flags: string[];
+  error_category: string | null;
+  decision: "approved" | "rejected" | null;
+  actor_kind: "user" | "system" | null;
+}
+
 export interface ActivityEvent {
   id: string;
   event_type: EventType;
@@ -64,6 +78,8 @@ export interface ActivityEvent {
   related_task_id: string | null;
   related_task_title: string | null;
   created_at: string;
+  /** Present on AI workflow events only. */
+  metadata?: ActivityMetadata;
 }
 
 export interface Integration {

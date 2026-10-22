@@ -1,19 +1,20 @@
 import {
-  DEFAULT_POLICY, DUPLICATE_OF_VIEWING, InMemoryAuditSink, InMemoryProcessingStore, SYNTHETIC_EMAILS, SYNTHETIC_NOW, rulesSelection,
-  TaskSinkDenied, parseOwnerRules, processMessage, reviewMessage,
-  type ClassifierSelection, type PipelineDeps, type ProcessedMessage, type RawEmail, type ReviewDecision, type TaskSink,
+  DEFAULT_POLICY, DUPLICATE_OF_VIEWING, InMemoryAuditSink, InMemoryProcessingStore, SYNTHETIC_EMAILS, SYNTHETIC_NOW, dedupeKey, describeAudit,
+  normalizeEmail, rulesSelection, sourceRef, toActivityEvents, TaskSinkDenied, parseOwnerRules, processMessage, reviewMessage,
+  type AuditEvent, type ClassifierSelection, type PipelineDeps, type ProcessedMessage, type RawEmail, type ReviewDecision, type TaskSink,
 } from "@/lib/ai-brain";
 import { checkTaskChange } from "@/lib/permissions";
-import type { Profile, TaskInput } from "@/lib/types";
+import type { ActivityEvent, Profile, TaskInput } from "@/lib/types";
 import { UserFacingError, type AiInboxRepo, type AiInboxView, type AiReviewInput } from "../types";
 import { LIMITS } from "./state";
 import { DEMO_USERS } from "./users";
 
 /**
  * DEMO ONLY. The AI Inbox in demo mode is built from the repository's SYNTHETIC sample emails, run
- * through the real pipeline on every request (deterministic, no network, no model call). Only the
- * visitor's decisions persist: an approval IS the task (deterministic id), a rejection is stored by
- * index. Nothing here reads a mailbox, and the UI labels the data as synthetic.
+ * through the real pipeline on every request (deterministic, no network unless the model classifier is
+ * enabled). Only the visitor's decisions persist, in the demo cookie: an approval IS the task
+ * (deterministic id; it records who created it and when), a rejection is stored with its reviewer and time.
+ * Nothing here reads a mailbox, and the UI labels the data as synthetic.
  */
 
 const [ADMIN, MEMBER_A, MEMBER_B] = DEMO_USERS;
@@ -35,17 +36,39 @@ export const DEMO_FIXTURES: readonly RawEmail[] = [
 /** What the visitor's storage can tell us, and how it records a decision. Implemented by the demo repo. */
 export interface DemoAiHost {
   user: Profile;
-  /** fixture index -> id of the task created from it. */
-  approved(): Promise<Map<number, string>>;
-  rejected(): Promise<number[]>;
+  now(): number;
+  /**
+   * Decisions this visitor made. Approvals ARE the created tasks (who created them and when is recorded there);
+   * rejections are stored with the reviewer and time. Both last as long as the demo cookie (24 h) and are
+   * discarded by "Reset demo". They are not a database.
+   */
+  decisions(): Promise<{
+    approved: { index: number; task_id: string; title: string; actor_id: string; at: string }[];
+    rejected: { index: number; actor_id: string; at: string }[];
+  }>;
   /** Idempotent on `index`: a repeat returns the existing task with created: false. */
   createTask(input: TaskInput, index: number): Promise<{ task_id: string; created: boolean }>;
+  /** Records the rejection with the current user and time. */
   reject(index: number): Promise<void>;
 }
 
+/** Workflow ids of the sample messages, computed without any classification. */
+let refs: string[] | undefined;
+const fixtureRefs = (): string[] => (refs ??= DEMO_FIXTURES.map((raw) => sourceRef(dedupeKey(normalizeEmail(raw, { now: SYNTHETIC_NOW }).message))));
+
+const DAY = 86_400_000;
 const clipTo = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelection = rulesSelection()): AiInboxRepo {
+function decisionEvent(workflow_id: string, decision: "approved" | "rejected", actorId: string, at: string, task_id: string | null): AuditEvent {
+  const e = {
+    event_type: "message_classified" as const, status: "processed" as const, stage: "audit" as const, at, workflow_id, task_id,
+    classifier: null, intent: null, outcome: decision === "approved" ? ("APPROVED" as const) : ("REJECTED" as const), flags: [],
+    error_category: null, actor: { kind: "user" as const, id: actorId }, decision,
+  };
+  return { ...e, description: describeAudit(e) };
+}
+
+export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelection = rulesSelection()): AiInboxRepo & { activity(withPipeline?: boolean): Promise<ActivityEvent[]> } {
   const { user } = host;
   const requireAdmin = () => {
     if (user.role !== "admin") throw new UserFacingError("Only administrators can use the AI Inbox.");
@@ -53,6 +76,7 @@ export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelecti
 
   async function build() {
     const store = new InMemoryProcessingStore(() => SYNTHETIC_NOW);
+    const audit = new InMemoryAuditSink();
     const sink: TaskSink = {
       async createTask(input, ctx) {
         if (ctx.actor.kind !== "user") throw new TaskSinkDenied("Automatic task creation is not available in the demo.");
@@ -70,7 +94,7 @@ export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelecti
       },
     };
     const deps: PipelineDeps = {
-      classifier: selection.classifier, store, audit: new InMemoryAuditSink(), taskSink: sink,
+      classifier: selection.classifier, store, audit, taskSink: sink,
       ownerRules: DEMO_OWNER_RULES, assignable: new Set(DEMO_USERS.map((u) => u.id)), policy: DEFAULT_POLICY, now: () => SYNTHETIC_NOW,
     };
     // Messages 0..n-2 are independent, so they run concurrently (model calls are slow). The last one is the
@@ -85,19 +109,47 @@ export function createDemoAiInbox(host: DemoAiHost, selection: ClassifierSelecti
     const last = DEMO_FIXTURES.length - 1;
     await Promise.all(Array.from({ length: last }, (_, i) => run(i)));
     await run(last);
+    // Pipeline events are complete at this point; anything emitted later (a review in this request) is not part of the feed.
+    const pipelineEvents = [...audit.events];
     // Overlay this visitor's decisions.
-    for (const [index, taskId] of await host.approved()) {
-      const key = keys[index];
-      if (key) await store.update(key, { status: "TASK_CREATED", task_id: taskId });
+    const d = await host.decisions();
+    for (const a of d.approved) {
+      const key = keys[a.index];
+      if (key) await store.update(key, { status: "TASK_CREATED", task_id: a.task_id });
     }
-    for (const index of await host.rejected()) {
-      const key = keys[index];
-      if (key) await store.update(key, { status: "REJECTED" });
+    for (const r of d.rejected) {
+      const key = keys[r.index];
+      if (key) await store.update(key, { status: "REJECTED", reviewed_by: r.actor_id });
     }
-    return { deps, store, keys: keys as readonly (string | null)[], duplicates };
+    return { deps, store, pipelineEvents, keys: keys as readonly (string | null)[], duplicates };
+  }
+
+  /**
+   * Activity-feed events. Pipeline events are regenerated from the synthetic emails (deterministic, stamped relative
+   * to "now" so they sort like the sample tasks). Decision events are derived ONLY from what was really recorded:
+   * the creator of an approved task, the reviewer and time of a rejection. Events from a review call itself are not
+   * kept, because a request-scoped sink cannot be durable and we do not pretend it is.
+   * Non-admins never trigger classification; they only see decision events for tasks they can already see.
+   */
+  async function activity(withPipeline = true): Promise<ActivityEvent[]> {
+    const ids = fixtureRefs();
+    const d = await host.decisions();
+    const decided: AuditEvent[] = [
+      ...d.approved.map((a) => decisionEvent(ids[a.index], "approved", a.actor_id, a.at, a.task_id)),
+      ...d.rejected.map((r) => decisionEvent(ids[r.index], "rejected", r.actor_id, r.at, null)),
+    ];
+    const title = new Map(d.approved.map((a) => [a.task_id, a.title]));
+    const out = toActivityEvents(decided, { idPrefix: "aid", at: (_i, e) => e.at, taskTitle: (id) => title.get(id) ?? null });
+    if (withPipeline && user.role === "admin") {
+      const { pipelineEvents } = await build();
+      const base = Math.floor(host.now() / DAY) * DAY - DAY + 9 * 3_600_000;
+      out.push(...toActivityEvents(pipelineEvents, { idPrefix: "ai", at: (i) => new Date(base + i * 1000).toISOString() }));
+    }
+    return out;
   }
 
   return {
+    activity,
     async view(): Promise<AiInboxView> {
       requireAdmin();
       const { store, duplicates } = await build();

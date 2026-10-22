@@ -9,7 +9,7 @@ import { UserFacingError, type Repo } from "../types";
 import type { ClassifierSelection } from "@/lib/ai-brain";
 import { createDemoAiInbox } from "./ai-inbox";
 import {
-  aiIndexOf, aiTaskId, decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
+  aiIndexOf, aiTaskId, userIdAt, userIndex, decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
   SEED_IDS, statusIndex, toTuple, type DemoState,
 } from "./state";
 import { DEMO_USERS } from "./users";
@@ -80,17 +80,20 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
 
   const aiInbox = createDemoAiInbox({
     user,
-    async approved() {
-      const m = new Map<number, string>();
-      for (const t of (await load()).t) { const i = aiIndexOf(t[0]); if (i !== null) m.set(i, t[0]); }
-      return m;
+    now,
+    async decisions() {
+      const st = await load();
+      const approved = st.t.flatMap((t) => {
+        const index = aiIndexOf(t[0]);
+        return index === null ? [] : [{ index, task_id: t[0], title: t[1], actor_id: userIdAt(t[7]), at: new Date(t[8] * 1000).toISOString() }];
+      });
+      return { approved, rejected: st.r.map(([index, actor, ts]) => ({ index, actor_id: userIdAt(actor), at: new Date(ts * 1000).toISOString() })) };
     },
-    async rejected() { return (await load()).r; },
     createTask: createAiTask,
     async reject(index) {
-      const s = await load();
-      if (!s.r.includes(index)) s.r.push(index);
-      await save(s);
+      const st = await load();
+      if (!st.r.some((r) => r[0] === index)) st.r.push([index, userIndex(user.id), Math.floor(now() / 1000)]);
+      await save(st);
     },
   }, opts.classifier);
 
@@ -150,12 +153,15 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
     async listActivity(limit) {
       const { tasks, events } = await view();
       const ids = new Set(tasks.filter(visible).map((t) => t.id));
-      return events.filter((e) => admin || e.actor_id === user.id || (e.related_task_id && ids.has(e.related_task_id))).slice(0, limit);
+      // Same visibility rule for AI events: admins see all; others only events they caused or tied to a task they can see.
+      const all = [...events, ...(await aiInbox.activity())].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return all.filter((e) => admin || e.actor_id === user.id || (e.related_task_id && ids.has(e.related_task_id))).slice(0, limit);
     },
     async listTaskActivity(taskId, limit) {
       const { tasks, events } = await view();
       if (!tasks.some((t) => t.id === taskId && visible(t))) return [];
-      return events.filter((e) => e.related_task_id === taskId).slice(0, limit);
+      const all = [...events, ...(await aiInbox.activity(false))].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return all.filter((e) => e.related_task_id === taskId).slice(0, limit);
     },
     async listIntegrations(): Promise<Integration[]> {
       return INTEGRATION_ORDER.map((provider) => ({ provider, status: "pending_setup", last_sync_at: null, last_error: null }));

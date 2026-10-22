@@ -1,6 +1,8 @@
 import type { EventStatus, EventType, Profile, TaskInput } from "@/lib/types";
 import type { IntegrationStatus } from "@/lib/types";
-import type { PipelineStage, ProcessedMessage, ProcessingStatus, RawEmail, SourceProvider } from "./schema";
+import type { AuditDecision, ErrorCategory, FALLBACK_REASONS, Intent, PipelineStage, ProcessedMessage, ProcessingStatus, RawEmail, RiskFlag, SourceProvider } from "./schema";
+
+type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 /**
  * Ports: everything the pipeline needs from the outside world. Each can be implemented by any
@@ -58,14 +60,28 @@ export interface Notifier {
 // G. Audit history -------------------------------------------------------------------------
 /** Maps onto the dashboard's existing activity_events (email_received, message_classified, ...). */
 export interface AuditEvent {
+  /** Existing dashboard taxonomy (activity_events.event_type). */
   event_type: EventType;
   status: EventStatus;
-  /** Short, content-free description (no message body). */
+  /** Built from the typed fields below by describeAudit(): fixed vocabulary, never message content. */
   description: string;
-  dedupe_key: string;
   stage: PipelineStage;
   at: string;
-  meta: Record<string, string | number | boolean | null>;
+  /**
+   * sourceRef(dedupe_key): short, non-reversible, stable per email. NEVER the dedupe key or Message-ID.
+   * null only when no message could be identified (input rejected before it had an identity).
+   */
+  workflow_id: string | null;
+  /** Dashboard task id, once a task exists. */
+  task_id: string | null;
+  classifier: { mode: "rules" | "llm"; fallback_reason: FallbackReason | null } | null;
+  intent: Intent | null;
+  outcome: ProcessingStatus | null;
+  flags: RiskFlag[];
+  error_category: ErrorCategory | null;
+  /** The authenticated reviewer, or the system. Never inferred. */
+  actor: { kind: "user" | "system"; id: string } | null;
+  decision: AuditDecision | null;
 }
 export interface AuditSink {
   record(e: AuditEvent): Promise<void>;

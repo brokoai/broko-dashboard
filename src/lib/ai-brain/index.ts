@@ -10,6 +10,7 @@ export {
   type Classifier, type LlmRequest, type LlmTransport,
 } from "./classifier";
 export { CachingClassifier, FallbackClassifier, rulesSelection, selectClassifier, type ClassifierSelection } from "./classifier-select";
+export { ActivityMetadataSchema, describeAudit, metadataOf, parseActivityMetadata, toActivityEvents } from "./activity";
 export { buildTaskInput, sourceRef } from "./task-mapping";
 export { loadAiBrainConfig, DEFAULT_MODEL, type AiBrainConfig } from "./config";
 export type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, ProviderConnection, TaskActor, TaskSink, TaskSinkContext } from "./ports";

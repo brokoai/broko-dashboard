@@ -46,6 +46,14 @@ export const PIPELINE_STAGES = [
 ] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
+/** Safe failure categories for audit events. Never an error message. */
+export const ERROR_CATEGORIES = [
+  "invalid_input", "classification_failed", "invalid_model_output", "task_creation_failed", "task_creation_denied", "notification_failed",
+] as const;
+export type ErrorCategory = (typeof ERROR_CATEGORIES)[number];
+export const AUDIT_DECISIONS = ["approved", "rejected"] as const;
+export type AuditDecision = (typeof AUDIT_DECISIONS)[number];
+
 export const IntentSchema = z.enum(INTENTS);
 export const UrgencySchema = z.enum(URGENCIES);
 export const RiskFlagSchema = z.enum(RISK_FLAGS);

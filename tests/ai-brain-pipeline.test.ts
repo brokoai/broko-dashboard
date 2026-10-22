@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   DUPLICATE_OF_VIEWING, SYNTHETIC_EMAILS, SyntheticEmailProvider, UnconfiguredEmailProvider, UnconfiguredNotifier,
-  ingestFromProvider, processMessage, reviewMessage, type Classifier, type RawEmail,
+  ingestFromProvider, processMessage, reviewMessage, sourceRef, type Classifier, type RawEmail,
 } from "../src/lib/ai-brain";
 import { ADMIN, CountingClassifier, FakeNotifier, MEMBER_A, MEMBER_B, makeDeps } from "./ai-brain-helpers";
 
@@ -285,7 +285,7 @@ describe("pipeline: opt-in automatic creation (policy low_risk, verified domain)
 });
 
 describe("audit trail", () => {
-  it("records each step in dashboard event types, content-free, tied to the dedupe key", async () => {
+  it("records each step in dashboard event types, content-free, tied to a hashed workflow id", async () => {
     const { deps, audit } = makeDeps({ notifier: new FakeNotifier() });
     const { record } = await processMessage(deps, viewing);
     await reviewMessage(deps, record!.dedupe_key, { action: "approve", by: ADMIN });
@@ -294,7 +294,8 @@ describe("audit trail", () => {
     const dump = JSON.stringify(audit.events);
     assert.ok(!dump.includes("+1 555 010 4477"), "no phone numbers in audit");
     assert.ok(!dump.includes("Hello, my name is"), "no email body in audit");
-    assert.ok(audit.events.every((e) => e.dedupe_key === record!.dedupe_key));
+    assert.ok(audit.events.every((e) => e.workflow_id === sourceRef(record!.dedupe_key)));
+    assert.ok(!dump.includes(record!.dedupe_key) && !dump.includes("viewing-1@example.test"), "neither the dedupe key nor the Message-ID is in audit events");
   });
 });
 

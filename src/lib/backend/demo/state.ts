@@ -29,8 +29,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export type StoredTask = [string, string, string, number, number, number, string, number, number, number, number];
 /** [kind, taskId, ts(sec), actor, fromStatus(-1), toStatus(-1)] */
 export type StoredEvent = [number, string, number, number, number, number];
-/** `r`: indexes of synthetic AI-inbox messages a reviewer rejected (approvals are the tasks themselves). */
-export interface DemoState { t: StoredTask[]; e: StoredEvent[]; r: number[] }
+/** [fixture index, reviewer (index into the demo users), ts(sec)]: a rejection of a synthetic AI-inbox message. */
+export type StoredRejection = [number, number, number];
+/** `r`: rejections (approvals are the tasks themselves, which already record who created them and when). */
+export interface DemoState { t: StoredTask[]; e: StoredEvent[]; r: StoredRejection[] }
 
 export const emptyState = (): DemoState => ({ t: [], e: [], r: [] });
 export const newTaskId = (): string => `n${randomBytes(5).toString("hex")}`;
@@ -59,6 +61,13 @@ function parseEvent(x: unknown): StoredEvent | null {
   return [k, id, ts, actor, from, to];
 }
 
+function parseRejection(x: unknown): StoredRejection | null {
+  if (!Array.isArray(x) || x.length !== 3) return null;
+  const [i, actor, ts] = x as unknown[];
+  if (!isInt(i, 0, LIMITS.aiMessages - 1) || !isInt(actor, 0, USER_IDS.length - 1) || !isInt(ts, 0, 4e9)) return null;
+  return [i, actor, ts];
+}
+
 /** Never throws: anything malformed or oversized yields the valid part (or an empty state). */
 export function decodeState(raw: string | null | undefined): DemoState {
   if (!raw || Buffer.byteLength(raw) > 16_000) return emptyState();
@@ -68,7 +77,11 @@ export function decodeState(raw: string | null | undefined): DemoState {
     const t = (Array.isArray(o.t) ? o.t : []).slice(0, LIMITS.tasks).map(parseTask)
       .filter((x): x is StoredTask => x !== null && !seen.has(x[0]) && !!seen.add(x[0]));
     const e = (Array.isArray(o.e) ? o.e : []).slice(-LIMITS.events).map(parseEvent).filter((x): x is StoredEvent => x !== null);
-    const r = [...new Set((Array.isArray(o.r) ? o.r : []).filter((n): n is number => isInt(n, 0, LIMITS.aiMessages - 1)))].slice(0, LIMITS.aiMessages);
+    // Only well-formed [index, reviewer, time] tuples. Anything else (including the old bare-index format) is dropped,
+    // so a decision is never shown without a real reviewer and time.
+    const seenR = new Set<number>();
+    const r = (Array.isArray(o.r) ? o.r : []).slice(0, LIMITS.aiMessages).map(parseRejection)
+      .filter((x): x is StoredRejection => x !== null && !seenR.has(x[0]) && !!seenR.add(x[0]));
     return { t, e, r };
   } catch {
     return emptyState();
@@ -93,6 +106,8 @@ export function toTuple(t: Task): StoredTask {
 }
 
 /** Tasks approved from the synthetic AI inbox have the deterministic id `ai<index>`, which makes approval idempotent. */
+export const userIdAt = (i: number): string => USER_IDS[i];
+export const userIndex = (id: string): number => Math.max(0, USER_IDS.indexOf(id));
 export const aiTaskId = (index: number) => `ai${index}`;
 export const aiIndexOf = (taskId: string): number | null => {
   const m = /^ai(\d{1,2})$/.exec(taskId);

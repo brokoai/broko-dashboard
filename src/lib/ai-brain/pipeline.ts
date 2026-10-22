@@ -9,9 +9,10 @@ import type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, T
 import { TaskSinkDenied } from "./ports";
 import { assessPriority, assessRisk, decide, proposeDeadline } from "./policy";
 import {
-  MessageAnalysisSchema, type ClassifierInfo, type OwnerRule, type PipelineStage, type ProcessedMessage, type ProcessingPolicy, type RawEmail,
+  MessageAnalysisSchema, type ClassifierInfo, type ErrorCategory, type OwnerRule, type PipelineStage, type ProcessedMessage, type ProcessingPolicy, type RawEmail,
 } from "./schema";
-import { buildTaskInput, type TaskOverrides } from "./task-mapping";
+import { describeAudit } from "./activity";
+import { buildTaskInput, sourceRef, type TaskOverrides } from "./task-mapping";
 
 /**
  * Email -> task pipeline:
@@ -52,13 +53,29 @@ function safeMessage(e: unknown): string {
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-async function emit(deps: PipelineDeps, key: string, stage: PipelineStage, event_type: AuditEvent["event_type"], status: AuditEvent["status"], description: string, meta: AuditEvent["meta"] = {}) {
+type EmitSpec = Pick<AuditEvent, "stage" | "event_type" | "status"> & Partial<Pick<AuditEvent, "task_id" | "classifier" | "intent" | "outcome" | "flags" | "error_category" | "actor" | "decision">>;
+
+/**
+ * Records an audit event. The description is generated from the typed fields (see describeAudit), the
+ * workflow id is the hashed sourceRef, and nothing from the message or from error text is passed through.
+ */
+async function emit(deps: PipelineDeps, key: string | null, spec: EmitSpec) {
+  const base = { task_id: null, classifier: null, intent: null, outcome: null, flags: [], error_category: null, actor: null, decision: null, ...spec };
+  // Only the typed fields leave this function: a richer object (e.g. the classifier's name) is trimmed.
+  if (base.classifier) base.classifier = { mode: base.classifier.mode, fallback_reason: base.classifier.fallback_reason };
   try {
-    await deps.audit.record({ event_type, status, description: clip(description, 200), dedupe_key: key, stage, at: (deps.now?.() ?? new Date()).toISOString(), meta: { origin: "ai_brain", ...meta } });
+    await deps.audit.record({ ...base, description: describeAudit(base), at: (deps.now?.() ?? new Date()).toISOString(), workflow_id: key ? sourceRef(key) : null });
   } catch {
     // The audit sink being down must not corrupt processing state; the record itself is the source of truth.
   }
 }
+
+const categoryFor = (stage: PipelineStage, e: unknown): ErrorCategory =>
+  stage === "normalize" ? "invalid_input" : stage === "validate" ? "invalid_model_output"
+  : stage === "task" ? (e instanceof TaskSinkDenied ? "task_creation_denied" : "task_creation_failed")
+  : stage === "notify" ? "notification_failed" : "classification_failed";
+
+const auditActor = (a: TaskActor): NonNullable<AuditEvent["actor"]> => (a.kind === "user" ? { kind: "user", id: a.profile.id } : { kind: "system", id: a.id });
 
 // -------------------------------------------------------------------------------- processing
 export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { retryFailed?: boolean } = {}): Promise<PipelineResult> {
@@ -72,7 +89,7 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
     stages.push({ stage: "normalize", ok: true });
   } catch (e) {
     stages.push({ stage: "normalize", ok: false, detail: safeMessage(e) });
-    await emit(deps, "invalid", "normalize", "workflow_failed", "failed", "Message rejected: it could not be normalised", { reason: safeMessage(e) });
+    await emit(deps, null, { stage: "normalize", event_type: "workflow_failed", status: "failed", error_category: "invalid_input" });
     return { outcome: "invalid_input", record: null, stages };
   }
   const { message, signals } = normalized;
@@ -100,14 +117,14 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
       return { outcome: "duplicate", record: claim.record, stages };
     }
   } else {
-    await emit(deps, key, "ingest", "email_received", "processed", `Email received: "${clip(message.subject, 80)}"`, { provider: message.provider });
+    await emit(deps, key, { stage: "ingest", event_type: "email_received", status: "processed" });
   }
 
   const fail = async (stage: PipelineStage, e: unknown): Promise<PipelineResult> => {
     const detail = safeMessage(e);
     stages.push({ stage, ok: false, detail });
     const record = await deps.store.update(key, { status: "FAILED", error: { stage, message: detail } });
-    await emit(deps, key, stage, "workflow_failed", "failed", `Processing failed at ${stage}`, { stage, reason: detail });
+    await emit(deps, key, { stage, event_type: "workflow_failed", status: "failed", outcome: "FAILED", error_category: categoryFor(stage, e) });
     return { outcome: "processed", record, stages };
   };
 
@@ -155,9 +172,9 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
     proposed_priority: analysis.requires_action ? priority : null, proposed_due_at: analysis.requires_action ? deadline.due_at : null,
     status: decision.status,
   });
-  await emit(deps, key, "decide", "message_classified", "processed", `Classified as ${analysis.intent} (confidence ${analysis.confidence.toFixed(2)})`, { intent: analysis.intent, status: decision.status, flags: flags.length });
+  await emit(deps, key, { stage: "decide", event_type: "message_classified", status: "processed", classifier: classifierInfo, intent: analysis.intent, outcome: decision.status, flags });
   if (analysis.requires_action && analysis.proposed_task) {
-    await emit(deps, key, "decide", "potential_task_identified", "processed", `Potential task: ${clip(analysis.proposed_task.title, 120)}`, { owner_rule: owner.rule_id });
+    await emit(deps, key, { stage: "decide", event_type: "potential_task_identified", status: decision.status === "REVIEW_REQUIRED" ? "pending" : "processed", classifier: classifierInfo, intent: analysis.intent, outcome: decision.status, flags });
   }
 
   // TASK + NOTIFY, only for policy-approved low-risk messages --------------------------------
@@ -172,7 +189,7 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
       // Not FAILED: the analysis is fine. A human can still approve it.
       stages.push({ stage: "task", ok: false, detail: safeMessage(e) });
       record = await deps.store.update(key, { status: "REVIEW_REQUIRED", review_reasons: [...record.review_reasons, "auto_create_denied"].slice(0, 12), error: { stage: "task", message: safeMessage(e) } });
-      await emit(deps, key, "task", "workflow_failed", "failed", "Automatic task creation was not permitted; sent for review", { reason: safeMessage(e) });
+      await emit(deps, key, { stage: "task", event_type: "workflow_failed", status: "failed", outcome: "REVIEW_REQUIRED", error_category: categoryFor("task", e), classifier: record.classifier, actor: auditActor(SYSTEM_ACTOR) });
     }
   }
   return { outcome: "processed", record, stages };
@@ -184,7 +201,7 @@ async function createTaskAndNotify(deps: PipelineDeps, record: ProcessedMessage,
   const created = await deps.taskSink!.createTask(input, { dedupe_key: key, source: "email", actor });
   stages.push({ stage: "task", ok: true, detail: created.created ? "created" : "already existed" });
   let next = await deps.store.update(key, { status: "TASK_CREATED", task_id: created.task_id, error: null });
-  await emit(deps, key, "task", "task_created", "processed", `Task created from email: ${clip(input.title, 120)}`, { task_id: created.task_id, created: created.created, assigned: input.assigned_to !== null });
+  await emit(deps, key, { stage: "task", event_type: "task_created", status: "processed", task_id: created.task_id, outcome: "TASK_CREATED", classifier: record.classifier, actor: auditActor(actor) });
 
   // NOTIFY: attempted only when there is an owner AND a configured adapter. Never claimed otherwise.
   if (input.assigned_to && deps.notifier && created.created) {
@@ -196,7 +213,7 @@ async function createTaskAndNotify(deps: PipelineDeps, record: ProcessedMessage,
     }
     stages.push({ stage: "notify", ok: n.sent, detail: n.detail });
     next = await deps.store.update(key, { notification: { attempted: true, sent: n.sent, detail: clip(n.detail, 200) }, ...(n.sent ? { status: "NOTIFICATION_SENT" as const } : {}) });
-    await emit(deps, key, "notify", n.sent ? "notification_sent" : "workflow_failed", n.sent ? "processed" : "failed", n.sent ? "Owner notified" : "Owner could not be notified", { detail: clip(n.detail, 100) });
+    await emit(deps, key, { stage: "notify", event_type: n.sent ? "notification_sent" : "workflow_failed", status: n.sent ? "processed" : "failed", task_id: created.task_id, outcome: n.sent ? "NOTIFICATION_SENT" : "TASK_CREATED", error_category: n.sent ? null : "notification_failed", classifier: record.classifier });
   } else {
     next = await deps.store.update(key, { notification: { attempted: false, sent: false, detail: !input.assigned_to ? "no owner to notify" : !deps.notifier ? "notification adapter not configured" : "task already existed; not re-notified" } });
   }
@@ -226,7 +243,7 @@ export async function reviewMessage(deps: PipelineDeps, dedupe: string, decision
   if (decision.action === "reject") {
     const next = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "REJECTED", reviewed_by: decision.by.id });
     if (!next) return { ok: false, error: "not_reviewable", message: "This message is no longer awaiting review.", record: rec };
-    await emit(deps, dedupe, "audit", "message_classified", "processed", "Proposal rejected by a reviewer", { reviewed_by: decision.by.id, decision: "rejected" });
+    await emit(deps, dedupe, { stage: "audit", event_type: "message_classified", status: "processed", decision: "rejected", outcome: "REJECTED", actor: auditActor({ kind: "user", profile: decision.by }), classifier: rec.classifier, intent: rec.analysis?.intent ?? null, flags: rec.risk_flags });
     return { ok: true, record: next };
   }
 
@@ -243,7 +260,7 @@ export async function reviewMessage(deps: PipelineDeps, dedupe: string, decision
   // Claim the approval atomically: the loser of a race gets "not_reviewable".
   const claimed = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "APPROVED", reviewed_by: by.id });
   if (!claimed) return { ok: false, error: "not_reviewable", message: "This message is no longer awaiting review.", record: rec };
-  await emit(deps, dedupe, "audit", "message_classified", "processed", "Proposal approved by a reviewer", { reviewed_by: by.id, decision: "approved" });
+  await emit(deps, dedupe, { stage: "audit", event_type: "message_classified", status: "processed", decision: "approved", outcome: "APPROVED", actor: auditActor({ kind: "user", profile: by }), classifier: rec.classifier, intent: rec.analysis?.intent ?? null, flags: rec.risk_flags });
 
   const stages: StageResult[] = [];
   try {
@@ -252,7 +269,7 @@ export async function reviewMessage(deps: PipelineDeps, dedupe: string, decision
   } catch (e) {
     // Put it back so a reviewer can retry; the task backend (not this code) is the source of truth.
     const back = await deps.store.update(dedupe, { status: "REVIEW_REQUIRED", error: { stage: "task", message: safeMessage(e) } });
-    await emit(deps, dedupe, "task", "workflow_failed", "failed", "Task creation failed after approval", { reason: safeMessage(e) });
+    await emit(deps, dedupe, { stage: "task", event_type: "workflow_failed", status: "failed", outcome: "REVIEW_REQUIRED", error_category: categoryFor("task", e), actor: auditActor({ kind: "user", profile: by }), classifier: rec.classifier });
     return { ok: false, error: e instanceof TaskSinkDenied ? "forbidden" : "task_failed", message: safeMessage(e), record: back };
   }
 }

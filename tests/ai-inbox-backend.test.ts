@@ -176,13 +176,16 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 });
 
 describe("stored rejections are validated like all demo state", () => {
-  it("drops junk, duplicates and out-of-range indexes, and is bounded", () => {
-    const raw = JSON.stringify({ t: [], e: [], r: [1, 1, -1, 99, "x", 2.5, null, 3, ...Array.from({ length: 50 }, (_, i) => i)] });
+  it("keeps only well-formed [index, reviewer, time] tuples; drops junk, duplicates, out-of-range and the old bare-index format", () => {
+    const good: [number, number, number] = [3, 1, 1_900_000_000];
+    const raw = JSON.stringify({ t: [], e: [], r: [good, [3, 2, 1_900_000_001], 1, 2, "x", null, [99, 0, 1], [1, 9, 1], [1, 0, -5], [1, 0], ...Array.from({ length: 50 }, (_, i) => [i % 16, 0, 1_800_000_000])] });
     const s = decodeState(raw);
-    assert.ok(s.r.every((n) => Number.isInteger(n) && n >= 0 && n < LIMITS.aiMessages));
-    assert.equal(new Set(s.r).size, s.r.length);
+    assert.deepEqual(s.r[0], good, "the first valid decision for an index wins");
+    assert.ok(s.r.every(([i, a, t]) => i >= 0 && i < LIMITS.aiMessages && a >= 0 && a < DEMO_USERS.length && t >= 0));
+    assert.equal(new Set(s.r.map((r) => r[0])).size, s.r.length);
     assert.ok(s.r.length <= LIMITS.aiMessages);
     assert.deepEqual(decodeState(JSON.stringify({ t: [], e: [], r: "nope" })), emptyState());
+    assert.deepEqual(decodeState(JSON.stringify({ t: [], e: [], r: [0, 1, 2] })).r, [], "old bare-index rejections are ignored, never shown without a reviewer");
     assert.deepEqual(decodeState(JSON.stringify({ t: [], e: [] })).r, [], "old cookies without r still load");
   });
 });
