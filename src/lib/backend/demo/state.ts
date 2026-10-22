@@ -11,6 +11,7 @@ import { DEMO_USERS } from "./users";
 export const LIMITS = {
   tasks: 6,          // changed-or-new tasks kept per visitor
   events: 8,
+  aiMessages: 16,    // synthetic AI-inbox messages (rejections are stored by index)
   title: 80,
   description: 120,
   /** Max UTF-8 bytes of the JSON payload. Signed + base64 this stays well under the 4 KB cookie limit. */
@@ -28,9 +29,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export type StoredTask = [string, string, string, number, number, number, string, number, number, number, number];
 /** [kind, taskId, ts(sec), actor, fromStatus(-1), toStatus(-1)] */
 export type StoredEvent = [number, string, number, number, number, number];
-export interface DemoState { t: StoredTask[]; e: StoredEvent[] }
+/** `r`: indexes of synthetic AI-inbox messages a reviewer rejected (approvals are the tasks themselves). */
+export interface DemoState { t: StoredTask[]; e: StoredEvent[]; r: number[] }
 
-export const emptyState = (): DemoState => ({ t: [], e: [] });
+export const emptyState = (): DemoState => ({ t: [], e: [], r: [] });
 export const newTaskId = (): string => `n${randomBytes(5).toString("hex")}`;
 
 const isInt = (v: unknown, min: number, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
@@ -61,18 +63,19 @@ function parseEvent(x: unknown): StoredEvent | null {
 export function decodeState(raw: string | null | undefined): DemoState {
   if (!raw || Buffer.byteLength(raw) > 16_000) return emptyState();
   try {
-    const o = JSON.parse(raw) as { t?: unknown; e?: unknown };
+    const o = JSON.parse(raw) as { t?: unknown; e?: unknown; r?: unknown };
     const seen = new Set<string>();
     const t = (Array.isArray(o.t) ? o.t : []).slice(0, LIMITS.tasks).map(parseTask)
       .filter((x): x is StoredTask => x !== null && !seen.has(x[0]) && !!seen.add(x[0]));
     const e = (Array.isArray(o.e) ? o.e : []).slice(-LIMITS.events).map(parseEvent).filter((x): x is StoredEvent => x !== null);
-    return { t, e };
+    const r = [...new Set((Array.isArray(o.r) ? o.r : []).filter((n): n is number => isInt(n, 0, LIMITS.aiMessages - 1)))].slice(0, LIMITS.aiMessages);
+    return { t, e, r };
   } catch {
     return emptyState();
   }
 }
 
-export const encodeState = (s: DemoState): string => JSON.stringify({ t: s.t, e: s.e });
+export const encodeState = (s: DemoState): string => JSON.stringify(s.r.length ? { t: s.t, e: s.e, r: s.r } : { t: s.t, e: s.e });
 export const encodedSize = (s: DemoState): number => Buffer.byteLength(encodeState(s));
 
 // ---------------------------------------------------------------- sample data
@@ -89,11 +92,20 @@ export function toTuple(t: Task): StoredTask {
   ];
 }
 
+/** Tasks approved from the synthetic AI inbox have the deterministic id `ai<index>`, which makes approval idempotent. */
+export const aiTaskId = (index: number) => `ai${index}`;
+export const aiIndexOf = (taskId: string): number | null => {
+  const m = /^ai(\d{1,2})$/.exec(taskId);
+  return m ? Number(m[1]) : null;
+};
+
 export function fromTuple([id, title, desc, st, pr, as, due, cr, c, u, d]: StoredTask): Task {
+  const ai = aiIndexOf(id);
   return {
     id, title, description: desc || null, status: TASK_STATUSES[st], priority: TASK_PRIORITIES[pr],
     assigned_to: as < 0 ? null : USER_IDS[as], assignee_name: nameAt(as), created_by: USER_IDS[cr],
-    due_at: due ? `${due}T00:00:00.000Z` : null, source: "manual", external_reference: null,
+    due_at: due ? `${due}T00:00:00.000Z` : null,
+    source: ai === null ? "manual" : "email", external_reference: ai === null ? null : `synthetic-email:${ai}`,
     created_at: secToIso(c), updated_at: secToIso(u), completed_at: d ? secToIso(d) : null,
   };
 }

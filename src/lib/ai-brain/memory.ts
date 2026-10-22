@@ -7,6 +7,7 @@ import type { ProcessedMessage, ProcessingStatus, RawEmail, SourceProvider } fro
  */
 export class InMemoryProcessingStore implements ProcessingStore {
   private readonly rows = new Map<string, ProcessedMessage>();
+  constructor(private readonly now: () => Date = () => new Date()) {}
 
   // Synchronous check-and-set inside one tick, so concurrent claims cannot both succeed.
   async claim(record: ProcessedMessage) {
@@ -22,7 +23,7 @@ export class InMemoryProcessingStore implements ProcessingStore {
   async update(key: string, patch: Partial<ProcessedMessage>) {
     const cur = this.rows.get(key);
     if (!cur) throw new Error("record not found");
-    const next = { ...cur, ...structuredClone(patch), updated_at: new Date().toISOString() } as ProcessedMessage;
+    const next = { ...cur, ...structuredClone(patch), updated_at: this.now().toISOString() } as ProcessedMessage;
     this.rows.set(key, next);
     return structuredClone(next);
   }

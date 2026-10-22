@@ -101,7 +101,7 @@ Proposed persistence: `supabase/proposed/0003_ai_brain.proposed.sql` (`ai_messag
 
 | Item | State |
 | --- | --- |
-| Contracts, validation, normalisation, grounding, owner rules, policy, pipeline, review flow, audit events | **Implemented and unit/integration tested** (144 tests in the repo suite, all synthetic) |
+| Contracts, validation, normalisation, grounding, owner rules, policy, pipeline, review flow, audit events | **Implemented and unit/integration tested** (163 tests in the repo suite, all synthetic) |
 | Rule-based classifier | **Implemented**, deterministic, modest confidence; baseline only |
 | LLM classifier + Anthropic transport | **Implemented, tested with fake transports/fetch only. Never called the live API.** |
 | Email ingestion (Microsoft Graph / Gmail) | **Not built.** Provider port + honest "pending_setup" placeholder only. Blocked on org OAuth app + admin consent. |
@@ -109,7 +109,7 @@ Proposed persistence: `supabase/proposed/0003_ai_brain.proposed.sql` (`ai_messag
 | Persistent processing store / task creation | **Blocked.** In-memory store + fake task sink in tests. SQL is proposed, unapplied, untested against Postgres. |
 | Task creation through the real dashboard backend | **Not built** (needs the Supabase backend to be verified first and the `TaskSink` binding). |
 | Notifications | **Not built.** `UnconfiguredNotifier` reports "not configured". |
-| Dashboard UI (AI Inbox, approvals, Overview/Team/Integrations) | **Not built** (Increment 5). |
+| Dashboard UI (AI Inbox, approvals) | **Implemented for the demo backend with synthetic data** (see INTEGRATION.md). Not connected to a real backend. |
 | Rate limiting of the ingest endpoint | **Not built** (no endpoint exists yet). |
 | Live security review of deployed behaviour | **Untested** (no deployment). |
 

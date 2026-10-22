@@ -6,8 +6,9 @@ import type {
 } from "@/lib/types";
 import { INTEGRATION_ORDER } from "@/lib/types";
 import { UserFacingError, type Repo } from "../types";
+import { createDemoAiInbox } from "./ai-inbox";
 import {
-  decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
+  aiIndexOf, aiTaskId, decodeState, encodedSize, encodeState, eventTuple, LIMITS, materialize, newTaskId,
   SEED_IDS, statusIndex, toTuple, type DemoState,
 } from "./state";
 import { DEMO_USERS } from "./users";
@@ -56,7 +57,44 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
     while (s.e.length > LIMITS.events) s.e.shift();
   };
 
+  /** Task created from a synthetic AI-inbox message. Deterministic id = idempotent: a repeat creates nothing. */
+  async function createAiTask(input: TaskInput, index: number) {
+    if (!canAssignTo(user, input.assigned_to)) throw new UserFacingError("Only administrators can assign tasks to other people.");
+    checkText(input.title, input.description);
+    const s = await load();
+    const id = aiTaskId(index);
+    if (s.t.some((t) => t[0] === id)) return { task_id: id, created: false };
+    const ts = Math.floor(now() / 1000);
+    const iso = new Date(ts * 1000).toISOString();
+    const task: Task = {
+      id, ...input, assignee_name: nameOf(input.assigned_to), created_by: user.id, source: "email",
+      external_reference: `synthetic-email:${index}`, created_at: iso, updated_at: iso, completed_at: null,
+    };
+    upsert(s, task);
+    pushEvent(s, eventTuple("task_created", id, ts, user.id));
+    if (task.assigned_to) pushEvent(s, eventTuple("task_assigned", id, ts, user.id));
+    await save(s);
+    return { task_id: id, created: true };
+  }
+
+  const aiInbox = createDemoAiInbox({
+    user,
+    async approved() {
+      const m = new Map<number, string>();
+      for (const t of (await load()).t) { const i = aiIndexOf(t[0]); if (i !== null) m.set(i, t[0]); }
+      return m;
+    },
+    async rejected() { return (await load()).r; },
+    createTask: createAiTask,
+    async reject(index) {
+      const s = await load();
+      if (!s.r.includes(index)) s.r.push(index);
+      await save(s);
+    },
+  });
+
   return {
+    aiInbox,
     async listTasks() { return visibleTasks(); },
     async getTask(id) { return (await visibleTasks()).find((t) => t.id === id) ?? null; },
     async taskCounts(): Promise<TaskCounts> {
