@@ -1,17 +1,26 @@
 -- ============================================================================
--- PROPOSED, NOT APPLIED, NOT EXECUTED ANYWHERE, SYNTAX NOT CHECKED AGAINST A DATABASE.
--- Fixes for the findings in docs/SECURITY_AND_MIGRATION_REVIEW.md.
--- Deliberately outside supabase/migrations/ so no tooling picks it up automatically.
--- Review with Broko's technical team; test on a scratch/staging database first.
--- Only relevant if Broko chooses Supabase/Postgres and 0001_init.sql is used at all.
+-- PROPOSED, NOT APPLIED to any remote database. Verified only on a local PostgreSQL (PGlite): see supabase/proposed/tests/.
+-- Fixes for the findings in docs/SECURITY_AND_MIGRATION_REVIEW.md and docs/SUPABASE_SECURITY_STATUS.md.
+-- Depends on 0001_init.sql and is meant to be applied WITH it: 0001 alone leaves task reassignment (H-1) to the application.
+-- These guards are the database-side enforcement of: who may be assigned a task, which task columns are server-controlled,
+-- and who may set an integration's connection state. Deliberately outside supabase/migrations/ so no tooling picks it up.
 -- ============================================================================
 
 -- M-2 / M-3: profile guard.
 -- 0001 raises for EVERY caller that is not an admin session, including the SQL editor and
 -- the service role (auth.uid() is null), so the documented "promote first admin" step fails.
 -- Allow trusted maintenance paths; also stop members editing their own email.
+-- ---- run as postgres, then put the session back exactly as it was (see docs/SUPABASE_CLI_ROLE_MODEL.md) ----
+-- On the dev project the CLI's login role (cli_login_postgres) is a member of postgres with SET but NOT INHERIT and has no
+-- CREATE on schema public, so objects can only be created after SET ROLE postgres (this also makes postgres the owner).
+-- The previous role is saved and restored at the end instead of `reset role`: if the CLI had already switched to postgres, a
+-- plain `reset role` would drop it back to the login role and the CLI's own migration-history insert, queued after this file,
+-- would fail. Saving and restoring is correct whether or not the CLI switched first, and when run in the SQL editor.
+select set_config('broko.prev_role', current_user, false);
+set role postgres;
+
 create or replace function public.guard_profile_update() returns trigger
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if auth.uid() is null then return new; end if;  -- SQL editor / service role / migrations
   if not public.is_admin() and (new.role  is distinct from old.role
@@ -25,7 +34,7 @@ end $$;
 -- H-1: task guard. 0001 lets a member who may edit a task reassign it to anyone (UPDATE policy
 -- checks visibility only), and lets any client set created_by/source/external_reference.
 create function public.tasks_guard() returns trigger
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if auth.uid() is null then return new; end if;   -- trusted service / maintenance
   if tg_op = 'INSERT' then
@@ -53,7 +62,7 @@ create trigger tasks_guard before insert or update on public.tasks
 -- H-2: an admin (or anyone) must not be able to mark an integration "connected" by hand.
 -- Only a trusted verification service (auth.uid() is null: service role) may do that.
 create function public.integrations_guard() returns trigger
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if auth.uid() is null then return new; end if;
   if (new.status in ('connected', 'error') and new.status is distinct from old.status)
@@ -71,7 +80,7 @@ create trigger integrations_guard before update on public.integrations
 -- L-1: notify the assignee when a task is CREATED already assigned to someone else
 -- (0001 only notifies on reassignment). Same function as 0001 plus the INSERT notification.
 create or replace function public.tasks_log_activity() returns trigger
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = '' as $$
 begin
   if tg_op = 'INSERT' then
     insert into public.activity_events (event_type, description, actor_id, related_task_id)
@@ -108,13 +117,16 @@ revoke update on public.notifications from authenticated;
 grant update (read_at) on public.notifications to authenticated;
 
 -- L-3: do not expose internal/trigger functions as callable RPC endpoints.
+-- The two functions created above (tasks_guard, integrations_guard) were created while Supabase's default privileges were in
+-- force, so they also carry EXECUTE for service_role: revoke it from every API role, like 0001 does for its trigger functions.
+-- (Trigger functions need no EXECUTE to fire: only the privilege to create the trigger is checked, once.)
 -- (is_admin must stay executable by `authenticated`: RLS policies call it.)
 revoke execute on function
-  public.handle_new_user(), public.guard_profile_update(), public.tasks_log_activity(),
+  public.handle_new_user(), public.guard_profile_update(), public.profiles_keep_an_admin(), public.tasks_log_activity(),
   public.tasks_before_write(), public.touch_updated_at(), public.tasks_guard(),
   public.integrations_guard()
-  from public, anon, authenticated;
-revoke execute on function public.is_admin() from public, anon;
+  from public, anon, authenticated, service_role;
+revoke execute on function public.is_admin() from public, anon, service_role;
 
 -- L-4: missing index for actor lookups.
 create index if not exists activity_events_actor_idx on public.activity_events (actor_id);
@@ -136,3 +148,9 @@ create index if not exists activity_events_actor_idx on public.activity_events (
 -- embed must be replaced (members could no longer resolve other people's names through
 -- `profiles`). Decide together with Broko whether member visibility of colleagues' emails matters.
 -- ---------------------------------------------------------------------------
+
+-- ---- restore the role this file started with ----
+do $$ begin
+  execute format('set role %I', current_setting('broko.prev_role'));
+  perform set_config('broko.prev_role', '', false);
+end $$;
