@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState, useTransition, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Loader2, MessageCircle, SendHorizontal, Trash2, X } from "lucide-react";
-import { askBroko } from "@/app/(app)/chat/actions";
+import { aiChatStatus, askBroko, unlockAiChat } from "@/app/(app)/chat/actions";
 import { MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "@/lib/ai-brain/chat/prompts";
 import { ChatLauncher, TurnView } from "@/components/broko-chat-view";
 import { chatReducer, initialChatState, retryText } from "@/lib/chat-state";
@@ -18,6 +18,32 @@ export function BrokoChat({ demo }: { demo: boolean }) {
   const log = useRef<HTMLDivElement>(null);
 
   const close = useCallback(() => dispatch({ type: "close" }), []);
+
+  // AI mode (paid model) is offered only when the server says it exists, and is switched on by a server-checked demo code.
+  const [ai, setAi] = useState<{ available: boolean; unlocked: boolean }>({ available: false, unlocked: false });
+  const [code, setCode] = useState("");
+  const [unlockMsg, setUnlockMsg] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  useEffect(() => {
+    if (!state.open) return;
+    let live = true;
+    aiChatStatus().then((s) => { if (live) setAi(s); }).catch(() => { if (live) setAi({ available: false, unlocked: false }); });
+    return () => { live = false; };
+  }, [state.open]);
+  const unlock = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!code.trim() || unlocking) return;
+    setUnlocking(true);
+    try {
+      const r = await unlockAiChat(code);
+      if (r.ok) { setAi({ available: true, unlocked: true }); setUnlockMsg(null); } else setUnlockMsg(r.error);
+    } catch {
+      setUnlockMsg("Could not check the code. Please try again.");
+    } finally {
+      setCode("");
+      setUnlocking(false);
+    }
+  };
 
   // The launcher is only mounted while the panel is closed, so focus goes back to it after the close has rendered.
   const wasOpen = useRef(false);
@@ -64,7 +90,7 @@ export function BrokoChat({ demo }: { demo: boolean }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); close(); return; }
       if (e.key !== "Tab" || !panel.current) return;
-      const items = [...panel.current.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea:not([disabled]),summary')].filter((n) => n.offsetParent !== null);
+      const items = [...panel.current.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),summary')].filter((n) => n.offsetParent !== null);
       if (!items.length) return;
       const first = items[0], last = items[items.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -116,6 +142,21 @@ export function BrokoChat({ demo }: { demo: boolean }) {
               <div role="status" className="mr-8 flex items-center gap-2 text-sm text-muted"><Loader2 size={16} className="animate-spin" aria-hidden /> Looking through your data…</div>
             )}
           </div>
+
+          {ai.available && (
+            <div className="border-t border-line bg-surface px-3 py-2 text-xs text-muted" data-testid="ai-mode">
+              {ai.unlocked ? (
+                <p>AI mode on: a language model helps understand your question. It still only reads the data shown above.</p>
+              ) : (
+                <form onSubmit={unlock} className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="broko-ai-code" className="shrink-0">AI mode (demo code)</label>
+                  <input id="broko-ai-code" type="password" autoComplete="off" value={code} maxLength={200} onChange={(e) => setCode(e.target.value)} className="min-h-9 min-w-0 flex-1 rounded-md border border-line bg-page px-2 text-base sm:text-sm" />
+                  <button type="submit" disabled={unlocking || code.trim().length === 0} className="min-h-9 rounded-md border border-line px-3 text-ink hover:bg-brand-soft disabled:opacity-50">Unlock</button>
+                  {unlockMsg && <p role="alert" className="w-full text-red-700">{unlockMsg}</p>}
+                </form>
+              )}
+            </div>
+          )}
 
           <form onSubmit={onSubmit} className="flex items-end gap-2 border-t border-line bg-surface p-2 sm:rounded-b-xl">
             <label htmlFor="broko-chat-input" className="sr-only">Ask Broko AI</label>

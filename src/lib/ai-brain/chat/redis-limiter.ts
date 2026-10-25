@@ -85,7 +85,7 @@ export function createRedisRateLimiter(opts: RedisLimiterOptions): ModelRateLimi
 }
 
 /** Builds the limiter from environment variables, or null when no store is configured (the router then stays fail-closed). */
-export function redisLimiterFromEnv(env: NodeJS.ProcessEnv): ModelRateLimiter | null {
+export function redisLimiterFromEnv(env: NodeJS.ProcessEnv, overrides: { name?: string; perUser?: Ceiling; global?: Ceiling } = {}): ModelRateLimiter | null {
   const url = env.UPSTASH_REDIS_REST_URL?.trim() || env.KV_REST_API_URL?.trim();
   const token = env.UPSTASH_REDIS_REST_TOKEN?.trim() || env.KV_REST_API_TOKEN?.trim();
   if (!url || !token || !/^https:\/\//i.test(url)) return null;
@@ -93,8 +93,8 @@ export function redisLimiterFromEnv(env: NodeJS.ProcessEnv): ModelRateLimiter | 
   return createRedisRateLimiter({
     url,
     token,
-    prefix: `broko:chat:${env.VERCEL_ENV ?? env.NODE_ENV ?? "unknown"}`,
-    perUser: { max: int(env.BROKO_AI_CHAT_USER_MAX, DEFAULT_PER_USER.max), windowSec: DEFAULT_PER_USER.windowSec },
-    global: { max: int(env.BROKO_AI_CHAT_GLOBAL_MAX, DEFAULT_GLOBAL.max), windowSec: DEFAULT_GLOBAL.windowSec },
+    prefix: `broko:${overrides.name ?? "chat"}:${env.VERCEL_ENV ?? env.NODE_ENV ?? "unknown"}`,
+    perUser: overrides.perUser ?? { max: int(env.BROKO_AI_CHAT_USER_MAX, DEFAULT_PER_USER.max), windowSec: DEFAULT_PER_USER.windowSec },
+    global: overrides.global ?? { max: int(env.BROKO_AI_CHAT_GLOBAL_MAX, DEFAULT_GLOBAL.max), windowSec: DEFAULT_GLOBAL.windowSec },
   });
 }
