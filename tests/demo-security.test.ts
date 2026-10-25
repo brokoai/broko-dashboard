@@ -79,6 +79,7 @@ describe("browser-local state: validation and bounds", () => {
     const s: DemoState = {
       t: Array.from({ length: LIMITS.tasks }, (_, i) => { const x = [...base] as DemoState["t"][number]; x[0] = `n${String(i).padStart(10, "0")}`; x[1] = "T".repeat(LIMITS.title); x[2] = "D".repeat(LIMITS.description); return x; }),
       e: Array.from({ length: LIMITS.events }, (_, i) => [3, `n${String(i).padStart(10, "0")}`, 1_900_000_000, 2, 2, 3]),
+      r: Array.from({ length: LIMITS.aiMessages }, (_, i): [number, number, number] => [i, 2, 1_900_000_000]),
     };
     assert.ok(encodedSize(s) <= LIMITS.maxEncodedBytes, `payload ${encodedSize(s)}B`);
     const cookie = `broko_demo_state=${sign(encodeState(s), deriveKey({ secret: SECRET, allowDevFallback: false }, "state"))}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400`;

@@ -1,23 +1,100 @@
-import { Inbox } from "lucide-react";
+import { Inbox, ShieldAlert } from "lucide-react";
+import { after } from "next/server";
 import { ActivityFeed } from "@/components/activity-feed";
+import { AiInboxList, type InboxRow } from "@/components/ai-inbox-list";
+import { AiQueuePanel } from "@/components/ai-queue-panel";
 import { Card, EmptyState, PageTitle } from "@/components/ui";
 import { getRepo, requireUser } from "@/lib/auth";
+import { queueActive } from "@/lib/ai-presentation";
 import type { EventType } from "@/lib/types";
 
 const AI_EVENTS: EventType[] = ["email_received", "message_classified", "potential_task_identified", "notification_sent", "workflow_failed"];
 
 export default async function InboxPage() {
   const user = await requireUser();
-  const events = (await (await getRepo(user)).listActivity(100)).filter((e) => AI_EVENTS.includes(e.event_type));
+  const repo = await getRepo(user);
+
+  if (!repo.aiInbox) {
+    const events = (await repo.listActivity(100)).filter((e) => AI_EVENTS.includes(e.event_type));
+    return (
+      <>
+        <PageTitle title="AI Inbox">Emails and messages processed by the AI, and the tasks it identifies. Only real processed records appear here.</PageTitle>
+        <Card>
+          {events.length === 0 ? (
+            <EmptyState icon={<Inbox size={22} />} title="Nothing processed yet">
+              The AI automation is not connected to this backend, so no email or message has been processed. Once a mail provider and persistent storage are connected, classified messages and suggested tasks will be listed here.
+            </EmptyState>
+          ) : <ActivityFeed events={events} />}
+        </Card>
+      </>
+    );
+  }
+
+  if (user.role !== "admin") {
+    return (
+      <>
+        <PageTitle title="AI Inbox">Review of AI-proposed tasks.</PageTitle>
+        <Card>
+          <EmptyState icon={<ShieldAlert size={22} />} title="Administrators only">
+            AI-proposed tasks are reviewed by administrators. Tasks assigned to you appear under Tasks as usual.
+          </EmptyState>
+        </Card>
+      </>
+    );
+  }
+
+  const [view, people, activity] = await Promise.all([repo.aiInbox.view(), repo.listPeople(), repo.listActivity(200)]);
+  const aiActivity = activity.filter((e) => e.metadata).slice(0, 20);
+  // Start the background worker AFTER this response is sent. The page itself never classifies or waits for the model.
+  const inbox = repo.aiInbox;
+  if (queueActive(view.queue)) after(async () => { try { await inbox.process(); } catch (e) { console.error("[ai-inbox] background run failed", e); } });
+  const rows: InboxRow[] = view.messages.map((m) => {
+    const { workflow_id } = m;
+    return {
+      m, workflow_id,
+      job: view.jobs.find((j) => j.workflow_id === workflow_id && j.outcome !== "duplicate") ?? null,
+      events: activity.filter((e) => e.metadata?.workflow_id === workflow_id).sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    };
+  });
+  const count = (...s: string[]) => view.messages.filter((m) => s.includes(m.status)).length;
+  const stats = [
+    ["Needs review", count("REVIEW_REQUIRED")], ["Tasks created", count("TASK_CREATED", "NOTIFICATION_SENT")],
+    ["Rejected", count("REJECTED")], ["No action", count("NO_ACTION")], ["Duplicates suppressed", view.duplicates_suppressed],
+  ] as const;
   return (
     <>
-      <PageTitle title="AI Inbox">Emails and messages processed by the AI, and the tasks it identifies. Only real processed records appear here.</PageTitle>
-      <Card>
-        {events.length === 0 ? (
-          <EmptyState icon={<Inbox size={22} />} title="Nothing processed yet">
-            The AI automation is not connected in this phase, so no email or message has been processed. Once Outlook/Gmail and the n8n workflow are connected, classified messages and suggested tasks will be listed here.
-          </EmptyState>
-        ) : <ActivityFeed events={events} />}
+      <PageTitle title="AI Inbox">The AI reads incoming messages and proposes tasks. A person approves each one before anything is created.</PageTitle>
+      {view.mode === "synthetic" && (
+        <div role="note" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">Synthetic sample messages. This is not a live mailbox.</p>
+          <p className="mt-1">No Outlook or Gmail account is connected and nothing was fetched. These sample emails run through the same analysis and approval flow so you can see how it will work. No reply is ever sent to a sender.</p>
+        </div>
+      )}
+      <p className="mb-4 text-sm text-fg" data-testid="classifier-mode">
+        <span className="font-medium">Classifier:</span>{" "}
+        {view.classifier.mode === "llm"
+          ? `AI model (${view.classifier.model}), with automatic fallback to the rule-based classifier if the model is unavailable or returns invalid output.`
+          : "Rule-based (deterministic keyword rules). No AI model is being called."}
+        {view.classifier.note && <span className="block text-muted">{view.classifier.note}</span>}
+        <span className="block text-muted">In both modes the model never chooses owners or approvals, and a person approves every task.</span>
+      </p>
+      <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {stats.map(([label, n]) => (
+          <div key={label} className="rounded-lg border border-line bg-surface p-3 shadow-card">
+            <dt className="text-xs text-muted">{label}</dt>
+            <dd className="text-xl font-semibold text-ink">{n}</dd>
+          </div>
+        ))}
+      </dl>
+      <AiQueuePanel jobs={view.jobs} queue={view.queue} workerNote={view.mode === "synthetic" ? "Messages are classified by a background worker, never while this page loads. In this demo the worker runs in the server process and is not durable: it restarts empty and is not a production queue." : "Messages are classified by a background worker."} />
+      {view.messages.length === 0 ? (
+        <Card><EmptyState icon={<Inbox size={22} />} title="Nothing to review yet">{queueActive(view.queue) ? "Messages are still being processed. This page updates by itself." : "No messages have been processed."}</EmptyState></Card>
+      ) : <AiInboxList rows={rows} people={people} />}
+      <Card title="AI activity" className="mt-4">
+        <p className="mb-3 text-sm text-muted">
+          What the AI workflow did, without email content. {view.mode === "synthetic" && "These events are regenerated from the synthetic sample emails on every visit; your approvals and rejections are remembered in this browser for up to 24 hours and are not stored in a database."}
+        </p>
+        <ActivityFeed events={aiActivity} emptyTitle="No AI activity yet" emptyText="Events appear as messages are processed." />
       </Card>
     </>
   );

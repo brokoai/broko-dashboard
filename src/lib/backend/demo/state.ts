@@ -11,6 +11,7 @@ import { DEMO_USERS } from "./users";
 export const LIMITS = {
   tasks: 6,          // changed-or-new tasks kept per visitor
   events: 8,
+  aiMessages: 16,    // synthetic AI-inbox messages (rejections are stored by index)
   title: 80,
   description: 120,
   /** Max UTF-8 bytes of the JSON payload. Signed + base64 this stays well under the 4 KB cookie limit. */
@@ -28,9 +29,12 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export type StoredTask = [string, string, string, number, number, number, string, number, number, number, number];
 /** [kind, taskId, ts(sec), actor, fromStatus(-1), toStatus(-1)] */
 export type StoredEvent = [number, string, number, number, number, number];
-export interface DemoState { t: StoredTask[]; e: StoredEvent[] }
+/** [fixture index, reviewer (index into the demo users), ts(sec)]: a rejection of a synthetic AI-inbox message. */
+export type StoredRejection = [number, number, number];
+/** `r`: rejections (approvals are the tasks themselves, which already record who created them and when). */
+export interface DemoState { t: StoredTask[]; e: StoredEvent[]; r: StoredRejection[] }
 
-export const emptyState = (): DemoState => ({ t: [], e: [] });
+export const emptyState = (): DemoState => ({ t: [], e: [], r: [] });
 export const newTaskId = (): string => `n${randomBytes(5).toString("hex")}`;
 
 const isInt = (v: unknown, min: number, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
@@ -57,22 +61,34 @@ function parseEvent(x: unknown): StoredEvent | null {
   return [k, id, ts, actor, from, to];
 }
 
+function parseRejection(x: unknown): StoredRejection | null {
+  if (!Array.isArray(x) || x.length !== 3) return null;
+  const [i, actor, ts] = x as unknown[];
+  if (!isInt(i, 0, LIMITS.aiMessages - 1) || !isInt(actor, 0, USER_IDS.length - 1) || !isInt(ts, 0, 4e9)) return null;
+  return [i, actor, ts];
+}
+
 /** Never throws: anything malformed or oversized yields the valid part (or an empty state). */
 export function decodeState(raw: string | null | undefined): DemoState {
   if (!raw || Buffer.byteLength(raw) > 16_000) return emptyState();
   try {
-    const o = JSON.parse(raw) as { t?: unknown; e?: unknown };
+    const o = JSON.parse(raw) as { t?: unknown; e?: unknown; r?: unknown };
     const seen = new Set<string>();
     const t = (Array.isArray(o.t) ? o.t : []).slice(0, LIMITS.tasks).map(parseTask)
       .filter((x): x is StoredTask => x !== null && !seen.has(x[0]) && !!seen.add(x[0]));
     const e = (Array.isArray(o.e) ? o.e : []).slice(-LIMITS.events).map(parseEvent).filter((x): x is StoredEvent => x !== null);
-    return { t, e };
+    // Only well-formed [index, reviewer, time] tuples. Anything else (including the old bare-index format) is dropped,
+    // so a decision is never shown without a real reviewer and time.
+    const seenR = new Set<number>();
+    const r = (Array.isArray(o.r) ? o.r : []).slice(0, LIMITS.aiMessages).map(parseRejection)
+      .filter((x): x is StoredRejection => x !== null && !seenR.has(x[0]) && !!seenR.add(x[0]));
+    return { t, e, r };
   } catch {
     return emptyState();
   }
 }
 
-export const encodeState = (s: DemoState): string => JSON.stringify({ t: s.t, e: s.e });
+export const encodeState = (s: DemoState): string => JSON.stringify(s.r.length ? { t: s.t, e: s.e, r: s.r } : { t: s.t, e: s.e });
 export const encodedSize = (s: DemoState): number => Buffer.byteLength(encodeState(s));
 
 // ---------------------------------------------------------------- sample data
@@ -89,11 +105,22 @@ export function toTuple(t: Task): StoredTask {
   ];
 }
 
+/** Tasks approved from the synthetic AI inbox have the deterministic id `ai<index>`, which makes approval idempotent. */
+export const userIdAt = (i: number): string => USER_IDS[i];
+export const userIndex = (id: string): number => Math.max(0, USER_IDS.indexOf(id));
+export const aiTaskId = (index: number) => `ai${index}`;
+export const aiIndexOf = (taskId: string): number | null => {
+  const m = /^ai(\d{1,2})$/.exec(taskId);
+  return m ? Number(m[1]) : null;
+};
+
 export function fromTuple([id, title, desc, st, pr, as, due, cr, c, u, d]: StoredTask): Task {
+  const ai = aiIndexOf(id);
   return {
     id, title, description: desc || null, status: TASK_STATUSES[st], priority: TASK_PRIORITIES[pr],
     assigned_to: as < 0 ? null : USER_IDS[as], assignee_name: nameAt(as), created_by: USER_IDS[cr],
-    due_at: due ? `${due}T00:00:00.000Z` : null, source: "manual", external_reference: null,
+    due_at: due ? `${due}T00:00:00.000Z` : null,
+    source: ai === null ? "manual" : "email", external_reference: ai === null ? null : `synthetic-email:${ai}`,
     created_at: secToIso(c), updated_at: secToIso(u), completed_at: d ? secToIso(d) : null,
   };
 }

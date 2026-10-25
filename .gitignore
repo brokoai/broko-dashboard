@@ -44,3 +44,7 @@ next-env.d.ts
 .claude/launch.json
 
 .claude/launch.json
+
+# Supabase CLI local state (linked project ref, pooler URL, tool versions): machine-specific, never commit
+supabase/.temp/
+supabase/.branches/

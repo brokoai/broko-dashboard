@@ -1,3 +1,4 @@
+import { parseActivityMetadata } from "@/lib/ai-brain/activity";
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayKey } from "@/lib/dates";
@@ -68,19 +69,21 @@ export function createSupabaseRepo(db: SupabaseClient, userId: string): Repo {
     async listActivity(limit) {
       const rows = check(
         await db.from("activity_events")
-          .select("id, event_type, description, status, actor_id, related_task_id, created_at, task:tasks(title)")
+          .select("id, event_type, description, status, actor_id, related_task_id, created_at, metadata, task:tasks(title)")
           .order("created_at", { ascending: false }).limit(limit),
-      ) as unknown as (Omit<ActivityEvent, "related_task_title"> & { task: { title: string } | null })[];
-      return rows.map(({ task, ...e }) => ({ ...e, related_task_title: task?.title ?? null }));
+      ) as unknown as (Omit<ActivityEvent, "related_task_title" | "metadata"> & { metadata: unknown; task: { title: string } | null })[];
+      // metadata is untrusted JSON: only the exact typed shape is kept, anything else is dropped (the event still renders).
+      return rows.map(({ task, metadata, ...e }) => ({ ...e, related_task_title: task?.title ?? null, metadata: parseActivityMetadata(metadata) }));
     },
     async listTaskActivity(taskId, limit) {
       const rows = check(
         await db.from("activity_events")
-          .select("id, event_type, description, status, actor_id, related_task_id, created_at, task:tasks(title)")
+          .select("id, event_type, description, status, actor_id, related_task_id, created_at, metadata, task:tasks(title)")
           .eq("related_task_id", taskId)
           .order("created_at", { ascending: false }).limit(limit),
-      ) as unknown as (Omit<ActivityEvent, "related_task_title"> & { task: { title: string } | null })[];
-      return rows.map(({ task, ...e }) => ({ ...e, related_task_title: task?.title ?? null }));
+      ) as unknown as (Omit<ActivityEvent, "related_task_title" | "metadata"> & { metadata: unknown; task: { title: string } | null })[];
+      // metadata is untrusted JSON: only the exact typed shape is kept, anything else is dropped (the event still renders).
+      return rows.map(({ task, metadata, ...e }) => ({ ...e, related_task_title: task?.title ?? null, metadata: parseActivityMetadata(metadata) }));
     },
     async listIntegrations() {
       const rows = check(await db.from("integrations").select("provider, status, last_sync_at, last_error")) as Integration[];
