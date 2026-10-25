@@ -18,10 +18,12 @@ const CATEGORY_LABEL: Record<ErrorCategory, string> = {
   task_creation_failed: "the task could not be created",
   task_creation_denied: "task creation was not permitted",
   notification_failed: "the owner could not be notified",
+  processing_interrupted: "processing was interrupted",
+  internal_error: "an internal error occurred",
 };
 
 /** Fixed-vocabulary description. The only text that reaches the Activity feed from the AI workflow. */
-export function describeAudit(e: Pick<AuditEvent, "event_type" | "decision" | "outcome" | "intent" | "classifier" | "error_category">): string {
+export function describeAudit(e: Pick<AuditEvent, "event_type" | "decision" | "outcome" | "intent" | "classifier" | "error_category" | "status">): string {
   if (e.decision === "approved") return "Proposal approved by a reviewer";
   if (e.decision === "rejected") return "Proposal rejected by a reviewer";
   switch (e.event_type) {
@@ -33,7 +35,10 @@ export function describeAudit(e: Pick<AuditEvent, "event_type" | "decision" | "o
     case "potential_task_identified": return e.outcome === "REVIEW_REQUIRED" ? "Potential task identified; awaiting human review" : "Potential task identified";
     case "task_created": return "Task created from email";
     case "notification_sent": return "Owner notified";
-    case "workflow_failed": return `Workflow failed: ${e.error_category ? CATEGORY_LABEL[e.error_category] : "unknown cause"}`;
+    case "workflow_failed": {
+      const why = e.error_category ? CATEGORY_LABEL[e.error_category] : "unknown cause";
+      return e.status === "pending" ? `Attempt failed, will retry: ${why}` : `Workflow failed: ${why}`;
+    }
     default: return "AI workflow event";
   }
 }

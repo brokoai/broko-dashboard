@@ -1,4 +1,4 @@
-import type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, ProviderConnection } from "./ports";
+import { auditEventKey, type AuditEvent, type AuditSink, type EmailProvider, type Notifier, type ProcessingStore, type ProviderConnection } from "./ports";
 import type { ProcessedMessage, ProcessingStatus, RawEmail, SourceProvider } from "./schema";
 
 /**
@@ -32,14 +32,30 @@ export class InMemoryProcessingStore implements ProcessingStore {
     if (!cur || !from.includes(cur.status)) return null;
     return this.update(key, patch);
   }
+  /** An independent copy (used to apply one visitor's decisions without touching shared state). */
+  clone(): InMemoryProcessingStore {
+    const c = new InMemoryProcessingStore(this.now);
+    for (const [k, v] of this.rows) c.rows.set(k, structuredClone(v));
+    return c;
+  }
   async list(limit: number) {
     return [...this.rows.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit).map((r) => structuredClone(r));
   }
 }
 
+/** Idempotent on auditEventKey: a retried job or a re-run never duplicates an event. */
 export class InMemoryAuditSink implements AuditSink {
   readonly events: AuditEvent[] = [];
-  async record(e: AuditEvent) { this.events.push(structuredClone(e)); }
+  private readonly keys = new Set<string>();
+  /** Test hook: make every write fail, like an unavailable database. */
+  failing = false;
+  async record(e: AuditEvent) {
+    if (this.failing) throw new Error("audit store unavailable");
+    const k = auditEventKey(e);
+    if (this.keys.has(k)) return;
+    this.keys.add(k);
+    this.events.push(structuredClone(e));
+  }
 }
 
 /** Honest default: says plainly that nothing was sent. */

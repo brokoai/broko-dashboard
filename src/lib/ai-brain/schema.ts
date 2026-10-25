@@ -49,8 +49,21 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 /** Safe failure categories for audit events. Never an error message. */
 export const ERROR_CATEGORIES = [
   "invalid_input", "classification_failed", "invalid_model_output", "task_creation_failed", "task_creation_denied", "notification_failed",
+  "processing_interrupted", "internal_error",
 ] as const;
 export type ErrorCategory = (typeof ERROR_CATEGORIES)[number];
+/** Durable job states (distinct from the message's ProcessingStatus). See docs/ai-brain/NEXT_PHASE_ARCHITECTURE_AUDIT.md. */
+export const JOB_STATUSES = ["queued", "processing", "retry_wait", "completed", "failed"] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+/** A reference to a message in a provider. The body is fetched at processing time and never stored by the job. */
+export const MessageRefSchema = z.strictObject({
+  provider: z.enum(SOURCE_PROVIDERS),
+  mailbox_ref: z.string().min(1).max(200),
+  source_message_id: z.string().min(1).max(300),
+});
+export type MessageRef = z.infer<typeof MessageRefSchema>;
+
 export const AUDIT_DECISIONS = ["approved", "rejected"] as const;
 export type AuditDecision = (typeof AUDIT_DECISIONS)[number];
 
@@ -222,6 +235,8 @@ export const ClassifierInfoSchema = z.strictObject({
 export type ClassifierInfo = z.infer<typeof ClassifierInfoSchema>;
 
 export const ProcessedMessageSchema = z.strictObject({
+  /** Opaque browser-facing id (see view.ts). The only handle the UI uses; never derivable from the fields below. */
+  review_id: z.uuid(),
   dedupe_key: z.string().min(1).max(700),
   provider: z.enum(SOURCE_PROVIDERS),
   source_message_id: z.string().min(1).max(LIMITS.messageId),
@@ -245,6 +260,10 @@ export const ProcessedMessageSchema = z.strictObject({
   task_id: z.string().max(100).nullable(),
   notification: z.strictObject({ attempted: z.boolean(), sent: z.boolean(), detail: z.string().max(200) }),
   reviewed_by: z.string().max(100).nullable(),
+  /** Server time of the human decision (never set by a model or a client). */
+  reviewed_at: z.iso.datetime().nullable(),
+  /** The owner a human confirmed at approval. `owner` above is only the rule-based SUGGESTION. */
+  confirmed_owner: z.strictObject({ user_id: z.string().max(100).nullable(), confirmed_by: z.string().max(100), confirmed_at: z.iso.datetime() }).nullable(),
   error: z.strictObject({ stage: z.enum(PIPELINE_STAGES), message: z.string().max(300) }).nullable(),
   created_at: z.iso.datetime(),
   updated_at: z.iso.datetime(),

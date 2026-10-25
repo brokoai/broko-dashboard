@@ -1,6 +1,6 @@
 import type { EventStatus, EventType, Profile, TaskInput } from "@/lib/types";
 import type { IntegrationStatus } from "@/lib/types";
-import type { AuditDecision, ErrorCategory, FALLBACK_REASONS, Intent, PipelineStage, ProcessedMessage, ProcessingStatus, RawEmail, RiskFlag, SourceProvider } from "./schema";
+import type { AuditDecision, ErrorCategory, MessageRef, FALLBACK_REASONS, Intent, PipelineStage, ProcessedMessage, ProcessingStatus, RawEmail, RiskFlag, SourceProvider } from "./schema";
 
 type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
@@ -8,6 +8,12 @@ type FallbackReason = (typeof FALLBACK_REASONS)[number];
  * Ports: everything the pipeline needs from the outside world. Each can be implemented by any
  * provider/database (Microsoft Graph, Gmail, Supabase, AWS, ...) without touching the AI logic.
  */
+
+/** Reads one message by reference at processing time. Read-only; the body is held in memory by the caller, never stored. */
+export interface MessageFetcher {
+  /** null = the message no longer exists in the provider. Throws on a transient provider error. */
+  fetch(ref: MessageRef): Promise<RawEmail | null>;
+}
 
 // A. Communication ingestion ---------------------------------------------------------------
 export interface ProviderConnection {
@@ -82,8 +88,18 @@ export interface AuditEvent {
   /** The authenticated reviewer, or the system. Never inferred. */
   actor: { kind: "user" | "system"; id: string } | null;
   decision: AuditDecision | null;
+  /** Attempt number, set on failure events only (successful steps happen once per workflow, so their key is stable across retries). */
+  attempt: number | null;
 }
+
+/**
+ * Idempotency key of an audit event. A sink MUST treat a second event with the same key as already recorded, so a
+ * retried job or a re-run after a crash never duplicates feed entries. Contains only the hashed workflow id and enums.
+ */
+export const auditEventKey = (e: Pick<AuditEvent, "workflow_id" | "event_type" | "stage" | "decision" | "attempt">): string =>
+  [e.workflow_id ?? "none", e.event_type, e.stage, e.decision ?? "-", e.attempt ?? 0].join(":");
 export interface AuditSink {
+  /** Must be idempotent on auditEventKey(e), and must throw if the event could not be persisted (never swallow). */
   record(e: AuditEvent): Promise<void>;
 }
 

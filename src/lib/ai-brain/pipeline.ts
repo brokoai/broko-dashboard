@@ -13,6 +13,7 @@ import {
 } from "./schema";
 import { describeAudit } from "./activity";
 import { buildTaskInput, sourceRef, type TaskOverrides } from "./task-mapping";
+import { reviewIdFor } from "./view";
 
 /**
  * Email -> task pipeline:
@@ -37,11 +38,35 @@ export interface PipelineDeps {
   now?: () => Date;
   tenant?: string;
   includeRecipients?: boolean;
+  /**
+   * Set by a job worker. Says whether a failure at this stage will be retried, so the audit event is "pending"
+   * (a retry is scheduled) rather than "failed" (terminal).
+   */
+  canRetry?: (stage: PipelineStage, e: unknown) => boolean;
 }
 
 export interface StageResult { stage: PipelineStage; ok: boolean; detail?: string }
 export type PipelineOutcome = "processed" | "duplicate" | "invalid_input";
-export interface PipelineResult { outcome: PipelineOutcome; record: ProcessedMessage | null; stages: StageResult[] }
+export interface PipelineResult {
+  outcome: PipelineOutcome; record: ProcessedMessage | null; stages: StageResult[];
+  /** False when at least one audit event could not be recorded. Processing is not undone; the problem is surfaced. */
+  audit_ok: boolean;
+}
+export interface ProcessOptions {
+  retryFailed?: boolean;
+  /**
+   * Only for a worker that holds the job lease: resume a record left in PROCESSING (crash) or FAILED (earlier attempt).
+   * Safe because the lease guarantees nobody else is processing this message.
+   */
+  takeOver?: boolean;
+  /** Attempt number, recorded on failure events. */
+  attempt?: number;
+}
+
+/** Wraps the audit sink so a failure is remembered (and still swallowed by emit, which must not break processing). */
+function trackAudit(deps: PipelineDeps, tracker: { failed: boolean }): PipelineDeps {
+  return { ...deps, audit: { record: async (e) => { try { await deps.audit.record(e); } catch (err) { tracker.failed = true; throw err; } } } };
+}
 
 const SYSTEM_ACTOR: TaskActor = { kind: "system", id: "broko-ai-brain" };
 
@@ -53,14 +78,14 @@ function safeMessage(e: unknown): string {
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-type EmitSpec = Pick<AuditEvent, "stage" | "event_type" | "status"> & Partial<Pick<AuditEvent, "task_id" | "classifier" | "intent" | "outcome" | "flags" | "error_category" | "actor" | "decision">>;
+type EmitSpec = Pick<AuditEvent, "stage" | "event_type" | "status"> & Partial<Pick<AuditEvent, "task_id" | "classifier" | "intent" | "outcome" | "flags" | "error_category" | "actor" | "decision" | "attempt">>;
 
 /**
  * Records an audit event. The description is generated from the typed fields (see describeAudit), the
  * workflow id is the hashed sourceRef, and nothing from the message or from error text is passed through.
  */
 async function emit(deps: PipelineDeps, key: string | null, spec: EmitSpec) {
-  const base = { task_id: null, classifier: null, intent: null, outcome: null, flags: [], error_category: null, actor: null, decision: null, ...spec };
+  const base = { attempt: null, task_id: null, classifier: null, intent: null, outcome: null, flags: [], error_category: null, actor: null, decision: null, ...spec };
   // Only the typed fields leave this function: a richer object (e.g. the classifier's name) is trimmed.
   if (base.classifier) base.classifier = { mode: base.classifier.mode, fallback_reason: base.classifier.fallback_reason };
   try {
@@ -70,7 +95,7 @@ async function emit(deps: PipelineDeps, key: string | null, spec: EmitSpec) {
   }
 }
 
-const categoryFor = (stage: PipelineStage, e: unknown): ErrorCategory =>
+export const categoryFor = (stage: PipelineStage, e: unknown): ErrorCategory =>
   stage === "normalize" ? "invalid_input" : stage === "validate" ? "invalid_model_output"
   : stage === "task" ? (e instanceof TaskSinkDenied ? "task_creation_denied" : "task_creation_failed")
   : stage === "notify" ? "notification_failed" : "classification_failed";
@@ -78,7 +103,13 @@ const categoryFor = (stage: PipelineStage, e: unknown): ErrorCategory =>
 const auditActor = (a: TaskActor): NonNullable<AuditEvent["actor"]> => (a.kind === "user" ? { kind: "user", id: a.profile.id } : { kind: "system", id: a.id });
 
 // -------------------------------------------------------------------------------- processing
-export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { retryFailed?: boolean } = {}): Promise<PipelineResult> {
+export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: ProcessOptions = {}): Promise<PipelineResult> {
+  const tracker = { failed: false };
+  const r = await processInner(trackAudit(deps, tracker), raw, opts);
+  return { ...r, audit_ok: !tracker.failed };
+}
+
+async function processInner(deps: PipelineDeps, raw: RawEmail, opts: ProcessOptions): Promise<Omit<PipelineResult, "audit_ok">> {
   const nowIso = () => (deps.now?.() ?? new Date()).toISOString();
   const stages: StageResult[] = [{ stage: "ingest", ok: true }];
 
@@ -98,7 +129,7 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
   // IDEMPOTENCY: claim exactly once --------------------------------------------------------
   const t = nowIso();
   const initial: ProcessedMessage = {
-    dedupe_key: key, provider: message.provider, source_message_id: message.source_message_id,
+    review_id: reviewIdFor(key), dedupe_key: key, provider: message.provider, source_message_id: message.source_message_id,
     internet_message_id: message.internet_message_id, mailbox_ref: message.mailbox_ref, received_at: message.received_at,
     sender_name: message.sender.name, sender_email: message.sender.email, subject: message.subject,
     excerpt: deps.policy.retain_excerpt_chars > 0 ? message.body_text.slice(0, deps.policy.retain_excerpt_chars) : null,
@@ -106,12 +137,14 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
     owner: { user_id: null, rule_id: null, reason: "not yet resolved" }, review_reasons: [],
     proposed_priority: null, proposed_due_at: null, task_id: null,
     notification: { attempted: false, sent: false, detail: "no notification attempted" },
-    reviewed_by: null, error: null, created_at: t, updated_at: t,
+    reviewed_by: null, reviewed_at: null, confirmed_owner: null, error: null, created_at: t, updated_at: t,
   };
   const claim = await deps.store.claim(initial);
   if (!claim.claimed) {
-    if (opts.retryFailed && claim.record.status === "FAILED") {
-      const retry = await deps.store.transition(key, ["FAILED"], { status: "PROCESSING", error: null });
+    const resumable: readonly ProcessedMessage["status"][] = opts.takeOver ? ["FAILED", "PROCESSING"] : opts.retryFailed ? ["FAILED"] : [];
+    if (resumable.includes(claim.record.status)) {
+      // PROCESSING -> PROCESSING is a no-op transition that still proves the record is in a resumable state.
+      const retry = await deps.store.transition(key, resumable, { status: "PROCESSING", error: null });
       if (!retry) return { outcome: "duplicate", record: claim.record, stages };
     } else {
       return { outcome: "duplicate", record: claim.record, stages };
@@ -120,11 +153,11 @@ export async function processMessage(deps: PipelineDeps, raw: RawEmail, opts: { 
     await emit(deps, key, { stage: "ingest", event_type: "email_received", status: "processed" });
   }
 
-  const fail = async (stage: PipelineStage, e: unknown): Promise<PipelineResult> => {
+  const fail = async (stage: PipelineStage, e: unknown): Promise<Omit<PipelineResult, "audit_ok">> => {
     const detail = safeMessage(e);
     stages.push({ stage, ok: false, detail });
     const record = await deps.store.update(key, { status: "FAILED", error: { stage, message: detail } });
-    await emit(deps, key, { stage, event_type: "workflow_failed", status: "failed", outcome: "FAILED", error_category: categoryFor(stage, e) });
+    await emit(deps, key, { stage, event_type: "workflow_failed", status: deps.canRetry?.(stage, e) ? "pending" : "failed", outcome: "FAILED", error_category: categoryFor(stage, e), attempt: opts.attempt ?? null });
     return { outcome: "processed", record, stages };
   };
 
@@ -226,7 +259,7 @@ export type ReviewDecision =
   | { action: "reject"; by: Profile; reason?: string };
 
 export type ReviewResult =
-  | { ok: true; record: ProcessedMessage }
+  | { ok: true; record: ProcessedMessage; /** False when the decision was saved but its audit event could not be recorded. */ audit_ok: boolean }
   | { ok: false; error: "not_found" | "forbidden" | "not_reviewable" | "invalid_override" | "task_failed"; message: string; record?: ProcessedMessage };
 
 /**
@@ -236,12 +269,21 @@ export type ReviewResult =
  * creates one task: the status change is compare-and-set.
  */
 export async function reviewMessage(deps: PipelineDeps, dedupe: string, decision: ReviewDecision): Promise<ReviewResult> {
+  const tracker = { failed: false };
+  const r = await reviewInner(trackAudit(deps, tracker), dedupe, decision);
+  return r.ok ? { ...r, audit_ok: !tracker.failed } : r;
+}
+
+type ReviewInner = Exclude<ReviewResult, { ok: true }> | { ok: true; record: ProcessedMessage };
+
+async function reviewInner(deps: PipelineDeps, dedupe: string, decision: ReviewDecision): Promise<ReviewInner> {
+  const at = (deps.now?.() ?? new Date()).toISOString();
   const rec = await deps.store.get(dedupe);
   if (!rec) return { ok: false, error: "not_found", message: "Message not found." };
   if (decision.by.role !== "admin") return { ok: false, error: "forbidden", message: "Only administrators can review AI-proposed tasks." };
 
   if (decision.action === "reject") {
-    const next = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "REJECTED", reviewed_by: decision.by.id });
+    const next = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "REJECTED", reviewed_by: decision.by.id, reviewed_at: at });
     if (!next) return { ok: false, error: "not_reviewable", message: "This message is no longer awaiting review.", record: rec };
     await emit(deps, dedupe, { stage: "audit", event_type: "message_classified", status: "processed", decision: "rejected", outcome: "REJECTED", actor: auditActor({ kind: "user", profile: decision.by }), classifier: rec.classifier, intent: rec.analysis?.intent ?? null, flags: rec.risk_flags });
     return { ok: true, record: next };
@@ -258,17 +300,19 @@ export async function reviewMessage(deps: PipelineDeps, dedupe: string, decision
   if (denied) return { ok: false, error: "forbidden", message: denied, record: rec };
 
   // Claim the approval atomically: the loser of a race gets "not_reviewable".
-  const claimed = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "APPROVED", reviewed_by: by.id });
+  const claimed = await deps.store.transition(dedupe, ["REVIEW_REQUIRED"], { status: "APPROVED", reviewed_by: by.id, reviewed_at: at, confirmed_owner: { user_id: input.assigned_to, confirmed_by: by.id, confirmed_at: at } });
   if (!claimed) return { ok: false, error: "not_reviewable", message: "This message is no longer awaiting review.", record: rec };
-  await emit(deps, dedupe, { stage: "audit", event_type: "message_classified", status: "processed", decision: "approved", outcome: "APPROVED", actor: auditActor({ kind: "user", profile: by }), classifier: rec.classifier, intent: rec.analysis?.intent ?? null, flags: rec.risk_flags });
 
   const stages: StageResult[] = [];
   try {
     const record = await createTaskAndNotify(deps, claimed, { kind: "user", profile: by }, overrides, stages);
+    // Recorded only after the task exists: a decision is never reported before it has actually taken effect.
+    await emit(deps, dedupe, { stage: "audit", event_type: "message_classified", status: "processed", decision: "approved", outcome: "APPROVED", actor: auditActor({ kind: "user", profile: by }), classifier: rec.classifier, intent: rec.analysis?.intent ?? null, flags: rec.risk_flags });
     return { ok: true, record };
   } catch (e) {
     // Put it back so a reviewer can retry; the task backend (not this code) is the source of truth.
-    const back = await deps.store.update(dedupe, { status: "REVIEW_REQUIRED", error: { stage: "task", message: safeMessage(e) } });
+    // The decision did not take effect, so it leaves no reviewer, time or confirmed owner behind.
+    const back = await deps.store.update(dedupe, { status: "REVIEW_REQUIRED", reviewed_by: null, reviewed_at: null, confirmed_owner: null, error: { stage: "task", message: safeMessage(e) } });
     await emit(deps, dedupe, { stage: "task", event_type: "workflow_failed", status: "failed", outcome: "REVIEW_REQUIRED", error_category: categoryFor("task", e), actor: auditActor({ kind: "user", profile: by }), classifier: rec.classifier });
     return { ok: false, error: e instanceof TaskSinkDenied ? "forbidden" : "task_failed", message: safeMessage(e), record: back };
   }

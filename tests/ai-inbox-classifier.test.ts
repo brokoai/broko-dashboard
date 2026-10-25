@@ -5,9 +5,11 @@ import {
   loadAiBrainConfig, normalizeEmail, processMessage, selectClassifier, type LlmTransport,
 } from "../src/lib/ai-brain";
 import { DEMO_FIXTURES } from "../src/lib/backend/demo/ai-inbox";
+import { createDemoAiRuntime } from "../src/lib/backend/demo/ai-runtime";
 import { createDemoRepo, DEMO_USERS, memoryStore } from "../src/lib/backend/demo/repo";
+import { makeClock, settle } from "./ai-worker-helpers";
 import type { AiInboxView } from "../src/lib/backend/types";
-import type { ProcessedMessage } from "../src/lib/ai-brain";
+import type { AiMessageView } from "../src/lib/ai-brain";
 import { makeDeps } from "./ai-brain-helpers";
 
 const [admin, memberA] = DEMO_USERS;
@@ -124,17 +126,18 @@ describe("result cache", () => {
 });
 
 describe("AI Inbox with the model classifier (fake transport; no network)", () => {
-  const find = (v: AiInboxView, re: RegExp): ProcessedMessage => v.messages.find((m) => re.test(m.subject))!;
-  const setup = (over?: (p: string) => unknown, env?: Record<string, string>) => {
+  const find = (v: AiInboxView, re: RegExp): AiMessageView => v.messages.find((m) => re.test(m.subject))!;
+  const setup = async (over?: (p: string) => unknown, env?: Record<string, string>) => {
     const f = fakeModel(over);
     const selection = selectClassifier(cfg(env), { transport: f.transport });
     const store = memoryStore();
     const inbox = (u: typeof admin) => createDemoRepo(u, store, () => NOW, { classifier: selection }).aiInbox!;
+    await inbox(admin).process(); // the background worker classifies; the page only reads
     return { f, inbox, store, selection };
   };
 
   it("states the active mode, classifies each unique message once, and does not classify the duplicate delivery", async () => {
-    const { f, inbox } = setup();
+    const { f, inbox } = await setup();
     const v = await inbox(admin).view();
     assert.deepEqual(v.classifier, { mode: "llm", model: "claude-haiku-5-5", note: null });
     assert.equal(f.state.calls, DEMO_FIXTURES.length - 1, "one model call per unique message");
@@ -146,7 +149,7 @@ describe("AI Inbox with the model classifier (fake transport; no network)", () =
   });
 
   it("model output cannot create tasks or approve: everything still waits for a person", async () => {
-    const { inbox, store } = setup();
+    const { inbox, store } = await setup();
     const v = await inbox(admin).view();
     assert.ok(v.messages.every((m) => !["TASK_CREATED", "NOTIFICATION_SENT", "APPROVED"].includes(m.status)));
     assert.equal((await createDemoRepo(admin, store, () => NOW).listTasks()).filter((t) => t.source === "email").length, 0);
@@ -154,37 +157,46 @@ describe("AI Inbox with the model classifier (fake transport; no network)", () =
 
   it("owners come from the configured rules, even when the model tries to name one", async () => {
     const hijack = (p: string) => ({ ...analysisFor(p), owner_id: "demo-admin", assigned_to: "demo-admin", approved: true });
-    const { inbox } = setup(hijack);
+    const { inbox } = await setup(hijack);
     const v = await inbox(admin).view();
     const viewing = find(v, /BR-1042/);
     assert.equal(viewing.classifier?.fallback_reason, "model_output_invalid");
     assert.equal(viewing.owner.user_id, memberA.id);
-    assert.equal(viewing.owner.rule_id, "viewings");
+    assert.ok(viewing.owner.reason.length > 0 && !("rule_id" in viewing.owner), "the rule id is internal configuration and not exposed");
     assert.equal(viewing.status, "REVIEW_REQUIRED");
   });
 
-  it("when the model API is down the inbox still works on rules and says so", async () => {
+  it("when the model API is down, jobs retry with backoff, then fall back to the rules visibly; the API is not hammered", async () => {
     const f = { calls: 0 };
     const selection = selectClassifier(cfg(), { transport: async () => { f.calls++; throw new Error(`down ${SECRET}`); } });
-    const store = memoryStore();
-    const v = await createDemoRepo(admin, store, () => NOW, { classifier: selection }).aiInbox!.view();
+    const clock = makeClock();
+    const rt = createDemoAiRuntime(selection, { now: clock.now, jitter: () => 1, config: { backoffBaseMs: 1_000, backoffCapMs: 1_000, modelCooldownMs: 500 } });
+    const repo = createDemoRepo(admin, memoryStore(), () => NOW, { classifier: selection, runtime: rt }).aiInbox!;
+    await repo.view();
+    await rt.drain();
+    const mid = await repo.view();
+    assert.equal(mid.messages.length, 0, "nothing is classified yet: the jobs are waiting to retry");
+    assert.ok(mid.jobs.every((j) => j.status === "retry_wait" || j.status === "queued"));
+    await settle(rt, clock);
+    const v = await repo.view();
     assert.equal(v.classifier.mode, "llm");
     assert.ok(v.messages.length > 0 && v.messages.every((m) => m.classifier?.fallback_reason === "model_unavailable" && m.classifier.mode === "rules"));
-    assert.ok(v.messages.every((m) => m.status !== "TASK_CREATED"));
+    assert.ok(v.messages.every((m) => m.status === "REVIEW_REQUIRED" || m.status === "NO_ACTION"), "a fallback result is never an approval");
+    assert.ok(v.queue.failed === 0 && v.queue.completed === DEMO_FIXTURES.length);
     assert.ok(!JSON.stringify(v).includes(SECRET));
-    assert.ok(f.calls < DEMO_FIXTURES.length, "the cooldown stops a failing API being hammered");
+    assert.ok(f.calls < DEMO_FIXTURES.length, `the shared circuit breaker stops every job hitting a dead API (${f.calls} calls)`);
   });
 
   it("the prompt-injection email stays flagged for review even when the model 'cooperates'", async () => {
-    const { inbox } = setup();
+    const { inbox } = await setup();
     const m = find(await inbox(admin).view(), /Quick question/);
     assert.equal(m.status, "REVIEW_REQUIRED");
     assert.ok(m.risk_flags.includes("prompt_injection_suspected"));
   });
 
   it("approval still works end to end and is applied to the right message despite concurrent classification", async () => {
-    const { inbox, store } = setup();
-    const key = find(await inbox(admin).view(), /BR-1042/).dedupe_key;
+    const { inbox, store } = await setup();
+    const key = find(await inbox(admin).view(), /BR-1042/).review_id;
     assert.equal((await inbox(admin).review(key, { action: "approve" })).ok, true);
     assert.equal((await inbox(admin).review(key, { action: "approve" })).ok, false, "a second approval is refused");
     const tasks = (await createDemoRepo(admin, store, () => NOW).listTasks()).filter((t) => t.source === "email");
@@ -195,16 +207,20 @@ describe("AI Inbox with the model classifier (fake transport; no network)", () =
   });
 
   it("rejection works in model mode", async () => {
-    const { inbox } = setup();
-    const key = find(await inbox(admin).view(), /Invoice 8841/).dedupe_key;
+    const { inbox } = await setup();
+    const key = find(await inbox(admin).view(), /Invoice 8841/).review_id;
     assert.equal((await inbox(admin).review(key, { action: "reject" })).ok, true);
     assert.equal(find(await inbox(admin).view(), /Invoice 8841/).status, "REJECTED");
   });
 
-  it("members cannot trigger classification or reviews: zero model calls", async () => {
-    const { f, inbox } = setup();
-    await assert.rejects(inbox(memberA).view());
-    const r = await inbox(memberA).review("broko|mid|viewing-1@example.test", { action: "approve" });
+  it("members cannot trigger classification, processing, requeue or reviews: zero model calls", async () => {
+    const f = fakeModel();
+    const selection = selectClassifier(cfg(), { transport: f.transport });
+    const repo = createDemoRepo(memberA, memoryStore(), () => NOW, { classifier: selection }).aiInbox!;
+    await assert.rejects(repo.view());
+    await assert.rejects(repo.process());
+    await assert.rejects(repo.requeue("x"));
+    const r = await repo.review("broko|mid|viewing-1@example.test", { action: "approve" });
     assert.equal(r.ok === false && r.error, "forbidden");
     assert.equal(f.state.calls, 0);
   });
@@ -212,7 +228,9 @@ describe("AI Inbox with the model classifier (fake transport; no network)", () =
   it("rule-based mode (default) makes no model calls and says so", async () => {
     const f = fakeModel();
     const selection = selectClassifier(loadAiBrainConfig({ ANTHROPIC_API_KEY: SECRET }), { transport: f.transport });
-    const v = await createDemoRepo(admin, memoryStore(), () => NOW, { classifier: selection }).aiInbox!.view();
+    const repo = createDemoRepo(admin, memoryStore(), () => NOW, { classifier: selection }).aiInbox!;
+    await repo.process();
+    const v = await repo.view();
     assert.deepEqual(v.classifier, { mode: "rules", model: null, note: null });
     assert.equal(f.state.calls, 0);
     assert.ok(v.messages.every((m) => m.classifier?.mode === "rules"));

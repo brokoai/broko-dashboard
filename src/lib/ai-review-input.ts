@@ -29,4 +29,4 @@ export function parseAiReviewInput(raw: unknown): { input: AiReviewInput } | { e
   return { input: out };
 }
 
-export const isValidDedupeKey = (k: unknown): k is string => typeof k === "string" && k.length > 0 && k.length <= 400;
+export { isValidReviewId } from "@/lib/ai-brain/view";

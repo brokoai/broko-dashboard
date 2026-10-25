@@ -4,9 +4,12 @@ import Link from "next/link";
 import { useId, useState, useTransition } from "react";
 import { reviewAiMessage } from "@/app/(app)/inbox/actions";
 import { Badge, Card, PriorityBadge, btn, cx, field } from "@/components/ui";
-import { formatDate } from "@/lib/dates";
-import { PRIORITY_LABEL, TASK_PRIORITIES, type Person, type TaskPriority } from "@/lib/types";
-import type { ProcessedMessage } from "@/lib/ai-brain";
+import { aiBadges, statusBadge } from "@/lib/activity-presentation";
+import { jobStatusBadge, ownerSummary } from "@/lib/ai-presentation";
+import type { AiJobView } from "@/lib/backend/types";
+import { formatDate, formatDateTime } from "@/lib/dates";
+import { PRIORITY_LABEL, TASK_PRIORITIES, type ActivityEvent, type Person, type TaskPriority } from "@/lib/types";
+import type { AiMessageView } from "@/lib/ai-brain";
 
 type Tone = "neutral" | "red" | "amber" | "blue" | "green" | "dark";
 
@@ -35,7 +38,7 @@ const REASON: Record<string, string> = {
 const reasonLabel = (r: string) =>
   REASON[r] ?? (r.startsWith("sensitive_intent:") ? `Sensitive topic (${text(r.slice(17))}). A person must decide.` : r.startsWith("risk:") ? `Risk flag: ${text(r.slice(5))}.` : text(r));
 
-function ReviewForm({ m, people, onDone }: { m: ProcessedMessage; people: Person[]; onDone: (taskId: string | null) => void }) {
+function ReviewForm({ m, people, onDone }: { m: AiMessageView; people: Person[]; onDone: (taskId: string | null, warning?: string) => void }) {
   const id = useId();
   const [assignee, setAssignee] = useState(m.owner.user_id ?? "");
   const [priority, setPriority] = useState<TaskPriority>(m.proposed_priority ?? "medium");
@@ -44,8 +47,8 @@ function ReviewForm({ m, people, onDone }: { m: ProcessedMessage; people: Person
   const [pending, start] = useTransition();
   const submit = (action: "approve" | "reject") => start(async () => {
     setError("");
-    const r = await reviewAiMessage(m.dedupe_key, action === "reject" ? { action } : { action, assigned_to: assignee || null, priority, due_at: due || null });
-    if (r.error) setError(r.error); else onDone(r.taskId ?? null);
+    const r = await reviewAiMessage(m.review_id, action === "reject" ? { action } : { action, assigned_to: assignee || null, priority, due_at: due || null });
+    if (r.error) setError(r.error); else onDone(r.taskId ?? null, r.warning);
   });
   return (
     <form onSubmit={(e) => { e.preventDefault(); submit("approve"); }} className="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-3" aria-label={`Review: ${m.subject}`}>
@@ -76,11 +79,15 @@ function ReviewForm({ m, people, onDone }: { m: ProcessedMessage; people: Person
   );
 }
 
-function MessageCard({ m, people, nameOf }: { m: ProcessedMessage; people: Person[]; nameOf: (id: string | null) => string }) {
-  const [done, setDone] = useState<{ taskId: string | null } | null>(null);
+export interface InboxRow { m: AiMessageView; workflow_id: string; job: AiJobView | null; events: ActivityEvent[] }
+
+function MessageCard({ row, people, nameOf }: { row: InboxRow; people: Person[]; nameOf: (id: string | null) => string }) {
+  const { m, job, events } = row;
+  const [done, setDone] = useState<{ taskId: string | null; warning?: string } | null>(null);
   const st = STATUS[m.status] ?? { label: text(m.status), tone: "neutral" as Tone };
   const a = m.analysis;
   const taskId = m.task_id ?? done?.taskId ?? null;
+  const owner = ownerSummary(m, nameOf);
   return (
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -103,6 +110,25 @@ function MessageCard({ m, people, nameOf }: { m: ProcessedMessage; people: Perso
         </p>
       )}
 
+      {job && (
+        <p className="mt-2 text-xs text-muted" data-testid="job-line">
+          Processing: <span className="font-medium">{jobStatusBadge(job.status).label}</span> on attempt {job.attempts} of {job.max_attempts}
+          {m.classifier ? ` using ${m.classifier.fallback_reason ? "the rules (the AI model was not used)" : m.classifier.mode === "llm" ? "the AI model" : "the rules"}` : ""}. Processing is not approval.
+          {job.audit_failed && <span className="block text-brand-dark">Some audit events for this message could not be recorded.</span>}
+        </p>
+      )}
+
+      {a && (a.requested_action || a.requested_date || a.urgency_evidence) && (
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer font-medium text-ink">Supporting evidence</summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-fg">
+            {a.requested_action && <li>Requested action: {a.requested_action}</li>}
+            {a.requested_date && <li>Date: {a.requested_date.date}, from the message: “{a.requested_date.evidence}”</li>}
+            {a.urgency_evidence && <li>Urgency ({a.urgency}), from the message: “{a.urgency_evidence}”</li>}
+          </ul>
+        </details>
+      )}
+
       {m.risk_flags.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5" role="list" aria-label="Risk flags">
           {m.risk_flags.map((f) => <span key={f} role="listitem"><Badge tone={f === "sender_unverified" ? "amber" : "red"}>{text(f)}</Badge></span>)}
@@ -114,7 +140,10 @@ function MessageCard({ m, people, nameOf }: { m: ProcessedMessage; people: Perso
       {a?.proposed_task && m.status !== "NO_ACTION" && (
         <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
           <div><dt className="inline text-muted">Proposed task: </dt><dd className="inline break-words">{a.proposed_task.title}</dd></div>
-          <div><dt className="inline text-muted">Suggested owner: </dt><dd className="inline">{m.owner.user_id ? nameOf(m.owner.user_id) : "none"} <span className="text-muted">({m.owner.reason})</span></dd></div>
+          <div><dt className="inline text-muted">AI-suggested owner: </dt><dd className="inline">{owner.suggested} <span className="text-muted">({owner.suggestedBecause})</span></dd></div>
+          {owner.confirmed !== null && (
+            <div><dt className="inline text-muted">Confirmed owner: </dt><dd className="inline">{owner.confirmed}{owner.changedByReviewer && <> <Badge tone="amber">Changed by reviewer</Badge></>}</dd></div>
+          )}
           <div><dt className="inline text-muted">Due: </dt><dd className="inline">{m.proposed_due_at ? formatDate(m.proposed_due_at) : "not stated"}</dd></div>
           {a.missing_information.length > 0 && <div><dt className="inline text-muted">Missing: </dt><dd className="inline">{a.missing_information.map(text).join(", ")}</dd></div>}
         </dl>
@@ -124,26 +153,49 @@ function MessageCard({ m, people, nameOf }: { m: ProcessedMessage; people: Perso
         <details className="mt-3 text-sm">
           <summary className="cursor-pointer font-medium text-ink">Why this needs review</summary>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-fg">{m.review_reasons.map((r) => <li key={r}>{reasonLabel(r)}</li>)}</ul>
-          {m.grounding_notes.length > 0 && <p className="mt-2 text-muted">{m.grounding_notes.length} AI claim(s) were removed because the message did not support them.</p>}
+          {m.grounding_removed > 0 && <p className="mt-2 text-muted">{m.grounding_removed} AI claim(s) were removed because the message did not support them.</p>}
         </details>
+      )}
+
+      {owner.decision && owner.decidedAt && (
+        <p className="mt-3 text-sm" data-testid="decision-line">
+          <span className="font-medium">{owner.decision === "approved" ? "Approved" : "Rejected"}</span> by {owner.decidedBy ?? "a reviewer"} on {formatDateTime(owner.decidedAt)}.
+        </p>
       )}
 
       {(m.status === "TASK_CREATED" || m.status === "NOTIFICATION_SENT" || done) && (
         <p className="mt-3 text-sm" role="status">
           Task created from this message. {taskId && <Link className="font-medium text-brand underline" href={`/tasks/${taskId}`}>View task</Link>}
-          <span className="block text-muted">Notification: {m.notification.attempted || !done ? m.notification.detail : "not sent (notification adapter not configured)"}</span>
+          <span className="block text-muted">Notification: {m.notification.attempted || !done ? m.notification.detail : "in-dashboard only; no external notification is sent"}</span>
+          {done?.warning && <span role="alert" className="block text-brand-dark">{done.warning}</span>}
         </p>
       )}
 
-      {m.status === "REVIEW_REQUIRED" && !done && <ReviewForm m={m} people={people} onDone={(id) => setDone({ taskId: id })} />}
+      {m.status === "REVIEW_REQUIRED" && !done && <ReviewForm m={m} people={people} onDone={(id, warning) => setDone({ taskId: id, warning })} />}
+
+      {events.length > 0 && (
+        <details className="mt-3 text-sm">
+          <summary className="cursor-pointer font-medium text-ink">Audit history ({events.length})</summary>
+          <ol className="mt-2 space-y-1.5">
+            {events.map((e) => (
+              <li key={e.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="break-words">{e.description}</span>
+                <time dateTime={e.created_at} className="text-xs text-muted">{formatDateTime(e.created_at)}</time>
+                <Badge tone={statusBadge(e.status).tone}>{statusBadge(e.status).label}</Badge>
+                {aiBadges(e).map((b) => <Badge key={b.label} tone={b.tone}>{b.label}</Badge>)}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
     </Card>
   );
 }
 
-export function AiInboxList({ messages, people }: { messages: ProcessedMessage[]; people: Person[] }) {
+export function AiInboxList({ rows, people }: { rows: InboxRow[]; people: Person[] }) {
   const names = new Map(people.map((p) => [p.id, p.full_name]));
   const nameOf = (id: string | null) => (id && names.get(id)) || "someone";
   const order: Record<string, number> = { REVIEW_REQUIRED: 0, FAILED: 1, TASK_CREATED: 2, NOTIFICATION_SENT: 2, REJECTED: 3, NO_ACTION: 4 };
-  const sorted = [...messages].sort((x, y) => (order[x.status] ?? 5) - (order[y.status] ?? 5));
-  return <div className="grid gap-4">{sorted.map((m) => <MessageCard key={m.dedupe_key} m={m} people={people} nameOf={nameOf} />)}</div>;
+  const sorted = [...rows].sort((x, y) => (order[x.m.status] ?? 5) - (order[y.m.status] ?? 5));
+  return <div className="grid gap-4">{sorted.map((row) => <MessageCard key={row.m.review_id} row={row} people={people} nameOf={nameOf} />)}</div>;
 }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 import { aiBadges, isKnownEventType, statusBadge } from "../src/lib/activity-presentation";
 import {
   FallbackClassifier, LlmClassifier, RuleBasedClassifier, SYNTHETIC_EMAILS, SYNTHETIC_NOW, UnconfiguredNotifier, describeAudit, normalizeEmail, parseActivityMetadata,
   dedupeKey, processMessage, reviewMessage, selectClassifier, loadAiBrainConfig, sourceRef, toActivityEvents, type AuditEvent, type Classifier, type LlmTransport,
 } from "../src/lib/ai-brain";
+import { createDemoAiRuntime, type DemoAiRuntime } from "../src/lib/backend/demo/ai-runtime";
 import { createDemoRepo, DEMO_USERS, memoryStore } from "../src/lib/backend/demo/repo";
+import { makeClock, settle } from "./ai-worker-helpers";
 import type { ActivityEvent } from "../src/lib/types";
 import { ADMIN, CountingClassifier, FakeNotifier, MEMBER_A, makeDeps } from "./ai-brain-helpers";
 
@@ -158,7 +160,7 @@ describe("mapping to the Activity feed", () => {
   const base: AuditEvent = {
     event_type: "message_classified", status: "processed", description: `Subject: ${viewing.subject} ${SECRET}`, stage: "decide", at: "2026-10-12T10:00:00.000Z",
     workflow_id: "0123456789ab", task_id: null, classifier: { mode: "llm", fallback_reason: null }, intent: "viewing_request", outcome: "REVIEW_REQUIRED",
-    flags: ["sender_unverified"], error_category: null, actor: null, decision: null,
+    flags: ["sender_unverified"], error_category: null, actor: null, decision: null, attempt: null,
   };
   const map = (e: AuditEvent[]) => toActivityEvents(e, { idPrefix: "t", at: (_i, ev) => ev.at });
 
@@ -214,9 +216,11 @@ describe("Activity feed presentation", () => {
 
 describe("demo backend Activity feed", () => {
   const [admin, memberA, memberB] = DEMO_USERS;
-  const repoFor = (u: typeof admin, store = memoryStore(), now = NOW, classifier?: ReturnType<typeof selectClassifier>) => createDemoRepo(u, store, () => now, { classifier });
+  const repoFor = (u: typeof admin, store = memoryStore(), now = NOW, classifier?: ReturnType<typeof selectClassifier>, runtime?: DemoAiRuntime) => createDemoRepo(u, store, () => now, { classifier, runtime });
   const aiOnly = (events: ActivityEvent[]) => events.filter((e) => e.metadata);
-  const keyOf = async (store: ReturnType<typeof memoryStore>, re: RegExp) => (await repoFor(admin, store).aiInbox!.view()).messages.find((m) => re.test(m.subject))!.dedupe_key;
+  // The page never classifies: events and messages exist once the background worker has processed the queue.
+  before(async () => { await repoFor(admin).aiInbox!.process(); });
+  const keyOf = async (store: ReturnType<typeof memoryStore>, re: RegExp) => (await repoFor(admin, store).aiInbox!.view()).messages.find((m) => re.test(m.subject))!.review_id;
 
   it("shows AI workflow events to administrators, content-free, with only existing event types", async () => {
     const events = await repoFor(admin).listActivity(200);
@@ -298,9 +302,16 @@ describe("demo backend Activity feed", () => {
 
   it("model mode and fallback show up in the feed metadata without leaking the key or error text", async () => {
     const selection = selectClassifier(loadAiBrainConfig({ BROKO_AI_CLASSIFIER: "llm", ANTHROPIC_API_KEY: SECRET }), { transport: async () => { throw new Error(`down ${SECRET}`); } });
-    const events = await repoFor(admin, memoryStore(), NOW, selection).listActivity(200);
+    const clock = makeClock();
+    const rt = createDemoAiRuntime(selection, { now: clock.now, jitter: () => 1, config: { backoffBaseMs: 1_000, backoffCapMs: 1_000, modelCooldownMs: 500 } });
+    const repo = repoFor(admin, memoryStore(), NOW, selection, rt);
+    await repo.aiInbox!.view();
+    await settle(rt, clock);
+    const events = await repo.listActivity(200);
     const classified = events.filter((e) => e.metadata?.intent);
     assert.ok(classified.length > 0 && classified.every((e) => e.metadata?.fallback_reason === "model_unavailable" && e.metadata.classifier_mode === "rules"));
+    const pending = events.filter((e) => e.event_type === "workflow_failed" && e.status === "pending");
+    assert.ok(pending.length > 0 && pending.every((e) => /^Attempt failed, will retry: /.test(e.description)), "retried attempts are pending, not failed");
     assertClean(events, "feed with a failing model");
   });
 

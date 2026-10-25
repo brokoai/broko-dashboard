@@ -1,22 +1,25 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { parseAiReviewInput, isValidDedupeKey } from "../src/lib/ai-review-input";
+import { before, describe, it } from "node:test";
+import { parseAiReviewInput, isValidReviewId } from "../src/lib/ai-review-input";
 import { createDemoRepo, DEMO_USERS, memoryStore } from "../src/lib/backend/demo/repo";
 import { DEMO_FIXTURES } from "../src/lib/backend/demo/ai-inbox";
 import { decodeState, encodedSize, emptyState, LIMITS } from "../src/lib/backend/demo/state";
 import { UserFacingError, type AiInboxView } from "../src/lib/backend/types";
-import type { ProcessedMessage } from "../src/lib/ai-brain";
+import type { AiMessageView } from "../src/lib/ai-brain";
 import type { TaskInput } from "../src/lib/types";
 
 const [admin, memberA, memberB] = DEMO_USERS;
 const NOW = Date.UTC(2026, 9, 12, 10, 0, 0);
 const as = (u: typeof admin, store = memoryStore()) => createDemoRepo(u, store, () => NOW);
 const inbox = (u: typeof admin, store = memoryStore()) => as(u, store).aiInbox!;
-const find = (v: AiInboxView, subject: RegExp): ProcessedMessage => v.messages.find((m) => subject.test(m.subject))!;
+const find = (v: AiInboxView, subject: RegExp): AiMessageView => v.messages.find((m) => subject.test(m.subject))!;
 const input = (over: Partial<TaskInput> = {}): TaskInput => ({ title: "t", description: null, status: "open", priority: "medium", assigned_to: null, due_at: null, ...over });
 const aiTasks = async (u: typeof admin, store: ReturnType<typeof memoryStore>) => (await as(u, store).listTasks()).filter((t) => t.source === "email");
 
 describe("AI Inbox (demo backend, synthetic messages only)", () => {
+  // The page never classifies: messages appear once the background worker has processed the queue.
+  before(async () => { await inbox(admin).process(); });
+
   it("is labelled synthetic, runs every sample message through the real pipeline, and suppresses the duplicate", async () => {
     const v = await inbox(admin).view();
     assert.equal(v.mode, "synthetic");
@@ -25,7 +28,6 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
     assert.equal(find(v, /Viewing request for property BR-1042/).status, "REVIEW_REQUIRED");
     assert.equal(find(v, /You have won/).status, "NO_ACTION");
     assert.ok(find(v, /Quick question/).risk_flags.includes("prompt_injection_suspected"));
-    assert.ok(v.messages.every((m) => m.provider === "synthetic"));
     assert.ok(v.messages.every((m) => m.status !== "TASK_CREATED"), "nothing is auto-created");
   });
 
@@ -36,7 +38,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("members cannot view or review, and nothing is created", async () => {
     const store = memoryStore();
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     await assert.rejects(inbox(memberA, store).view(), UserFacingError);
     const r = await inbox(memberA, store).review(key, { action: "approve" });
     assert.equal(r.ok === false && r.error, "forbidden");
@@ -48,7 +50,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("approval creates one task through the existing backend, linked to its source, assigned by the owner rule", async () => {
     const store = memoryStore();
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     const r = await inbox(admin, store).review(key, { action: "approve" });
     assert.equal(r.ok, true);
     const tasks = await aiTasks(admin, store);
@@ -71,7 +73,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("approving twice, or concurrently, never creates a second task", async () => {
     const store = memoryStore();
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     await Promise.all([1, 2, 3].map(() => inbox(admin, store).review(key, { action: "approve" })));
     assert.equal((await aiTasks(admin, store)).length, 1);
     const again = await inbox(admin, store).review(key, { action: "approve" });
@@ -87,7 +89,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("approval honours reviewer overrides within the existing assignment rule", async () => {
     const store = memoryStore();
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     const bad = await inbox(admin, store).review(key, { action: "approve", assigned_to: "someone-else" });
     assert.equal(bad.ok === false && bad.error, "invalid_override");
     const badDate = await inbox(admin, store).review(key, { action: "approve", due_at: "soon" });
@@ -101,7 +103,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("rejection persists, creates nothing, and cannot later be approved", async () => {
     const store = memoryStore();
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     assert.equal((await inbox(admin, store).review(key, { action: "reject" })).ok, true);
     assert.equal(find(await inbox(admin, store).view(), /BR-1042/).status, "REJECTED");
     const late = await inbox(admin, store).review(key, { action: "approve" });
@@ -113,7 +115,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
 
   it("decisions are per visitor", async () => {
     const mine = memoryStore(), theirs = memoryStore();
-    const key = find(await inbox(admin, mine).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, mine).view(), /BR-1042/).review_id;
     await inbox(admin, mine).review(key, { action: "approve" });
     assert.equal(find(await inbox(admin, theirs).view(), /BR-1042/).status, "REVIEW_REQUIRED");
     assert.equal((await aiTasks(admin, theirs)).length, 0);
@@ -123,14 +125,15 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
     const store = memoryStore();
     const v = await inbox(admin, store).view();
     const spam = find(v, /You have won/);
-    const r = await inbox(admin, store).review(spam.dedupe_key, { action: "approve" });
+    const r = await inbox(admin, store).review(spam.review_id, { action: "approve" });
     assert.equal(r.ok === false && r.error, "not_reviewable");
     assert.equal((await aiTasks(admin, store)).length, 0);
   });
 
-  it("unknown message keys are reported without leaking anything", async () => {
-    const r = await inbox(admin).review("nope", { action: "approve" });
+  it("unknown review ids are reported without leaking anything", async () => {
+    const r = await inbox(admin).review("0b5fd0c4-6a6f-4e0a-9b1e-3f2f6a1c2d3e", { action: "approve" });
     assert.equal(r.ok === false && r.error, "not_found");
+    assert.equal(r.ok === false && r.record, undefined);
   });
 
   it("sensitive and suspicious messages are flagged for a human with reasons, never auto-created", async () => {
@@ -151,7 +154,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
     const store = memoryStore();
     const repo = as(admin, store);
     for (let i = 0; i < LIMITS.tasks; i++) await repo.createTask(input({ title: `filler ${i}` }));
-    const key = find(await inbox(admin, store).view(), /BR-1042/).dedupe_key;
+    const key = find(await inbox(admin, store).view(), /BR-1042/).review_id;
     const r = await inbox(admin, store).review(key, { action: "approve" });
     assert.equal(r.ok, false);
     assert.match(!r.ok ? r.message : "", /Reset demo|keeps up to/);
@@ -164,7 +167,7 @@ describe("AI Inbox (demo backend, synthetic messages only)", () => {
     const v = await inbox(admin, store).view();
     const reviewable = v.messages.filter((m) => m.status === "REVIEW_REQUIRED");
     let i = 0;
-    for (const m of reviewable) await inbox(admin, store).review(m.dedupe_key, i++ % 2 ? { action: "reject" } : { action: "approve" });
+    for (const m of reviewable) await inbox(admin, store).review(m.review_id, i++ % 2 ? { action: "reject" } : { action: "approve" });
     assert.ok(encodedSize(decodeState(await store.read())) <= LIMITS.maxEncodedBytes);
   });
 
@@ -208,8 +211,8 @@ describe("review request validation (the browser is untrusted)", () => {
     assert.deepEqual(r, { input: { action: "approve" } });
   });
 
-  it("validates the message key", () => {
-    assert.equal(isValidDedupeKey("broko|mid|abc"), true);
-    for (const k of ["", undefined, 5, "x".repeat(401)]) assert.equal(isValidDedupeKey(k), false);
+  it("validates the opaque review id", () => {
+    assert.equal(isValidReviewId("0b5fd0c4-6a6f-4e0a-9b1e-3f2f6a1c2d3e"), true);
+    for (const k of ["", undefined, 5, null, "broko|mid|abc", "x".repeat(401), "0B5FD0C4-6A6F-4E0A-9B1E-3F2F6A1C2D3E", "0b5fd0c4-6a6f-4e0a-9b1e-3f2f6a1c2d3e ", "0b5fd0c46a6f4e0a9b1e3f2f6a1c2d3e"]) assert.equal(isValidReviewId(k), false, String(k));
   });
 });

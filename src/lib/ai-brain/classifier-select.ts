@@ -85,6 +85,11 @@ export interface ClassifierSelection {
   model: string | null;
   /** Shown to the user when the requested mode could not be honoured. Never contains secrets. */
   note: string | null;
+  /**
+   * Present in model mode only. A background worker applies its own timeout/retry/fallback policy, so it needs the raw
+   * model classifier (cached on success) and the rules separately. Without it, `classifier` is used as is.
+   */
+  llm?: { primary: Classifier; fallback: Classifier };
 }
 
 export const rulesSelection = (note: string | null = null): ClassifierSelection => ({ classifier: new RuleBasedClassifier(), mode: "rules", model: null, note });
@@ -99,6 +104,7 @@ export function selectClassifier(cfg: AiBrainConfig, deps: { transport?: LlmTran
   if (!deps.transport && !key) return rulesSelection("The model classifier was requested but no API key is configured, so the rule-based classifier is being used.");
   const transport = deps.transport ?? anthropicTransport({ apiKey: key as string, model: cfg.llm.model, timeoutMs: 20_000 });
   const model = new LlmClassifier(transport, `llm:${cfg.llm.model}`);
-  const classifier = new CachingClassifier(new FallbackClassifier(model, new RuleBasedClassifier(), { now: deps.now }), { now: deps.now });
-  return { classifier, mode: "llm", model: cfg.llm.model, note: null };
+  const rules = new RuleBasedClassifier();
+  const classifier = new CachingClassifier(new FallbackClassifier(model, rules, { now: deps.now }), { now: deps.now });
+  return { classifier, mode: "llm", model: cfg.llm.model, note: null, llm: { primary: new CachingClassifier(model, { now: deps.now }), fallback: rules } };
 }
