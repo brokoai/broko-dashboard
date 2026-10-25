@@ -1,5 +1,5 @@
 import "server-only";
-import { createChatRouter, createMemoryRateLimiter, type ChatRouter, type ModelRateLimiter } from "@/lib/ai-brain/chat";
+import { createChatRouter, createMemoryRateLimiter, redisLimiterFromEnv, type ChatRouter, type ModelRateLimiter } from "@/lib/ai-brain/chat";
 import { createModelTransport, loadAiBrainConfig } from "@/lib/ai-brain";
 
 /** Why the chat has, or does not have, a model interpreter. Content-free: safe to log and to assert on. */
@@ -36,7 +36,7 @@ let resolved: ChatRouterResolution | undefined;
 /** The chat's model interpreter, or null (deterministic routing only). Built once per server instance. */
 export function chatRouter(env: NodeJS.ProcessEnv = process.env): ChatRouter | null {
   if (!resolved) {
-    resolved = resolveChatRouter(env);
+    resolved = resolveChatRouter(env, redisLimiterFromEnv(env) ?? undefined);
     if (!resolved.status.enabled && resolved.status.reason === "production_needs_durable_limiter") {
       console.warn("[chat] BROKO_AI_CHAT=llm is ignored in production: no durable rate limiter is configured, so chat stays deterministic.");
     }
