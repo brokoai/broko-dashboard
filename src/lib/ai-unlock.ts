@@ -22,7 +22,20 @@ export const MAX_CODE_INPUT = 200;
 export const UNLOCK_PER_CLIENT = { max: 5, windowSec: 15 * 60 };
 export const UNLOCK_GLOBAL = { max: 30, windowSec: 60 * 60 };
 
-export const codeConfigured = (expected: string | undefined): expected is string => !!expected && expected.length >= MIN_DEMO_CODE_LENGTH;
+/**
+ * Whether paid AI mode needs the shared code at all. The demo sign-in is open (anyone who can load the app can pick a demo user),
+ * so it does NOT protect paid calls by itself. Vercel Preview deployments are behind Vercel Authentication (team login), and a
+ * local development server is one person's machine; on those the code is waived. Everywhere else, notably the public production
+ * domain, the code is required. If Preview protection is ever switched off, set the project back to requiring the code by
+ * removing this waiver (see docs/ai-brain/CHAT.md).
+ */
+export function unlockRequired(env: NodeJS.ProcessEnv): boolean {
+  if (env.VERCEL_ENV === "preview") return false;
+  if (!env.VERCEL_ENV && env.NODE_ENV === "development") return false;
+  return true;
+}
+
+export const codeConfigured =(expected: string | undefined): expected is string => !!expected && expected.length >= MIN_DEMO_CODE_LENGTH;
 
 /** Constant-time comparison: both sides are hashed to equal length first, so neither length nor content leaks through timing. */
 export function codeMatches(given: string, expected: string): boolean {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { createChatRouter, createMemoryRateLimiter, createRedisRateLimiter, redisLimiterFromEnv } from "../src/lib/ai-brain/chat";
-import { attemptUnlock, codeConfigured, codeMatches, createUnlockToken, isUnlocked, UNLOCK_TTL_SECONDS, unlockKey, unlockThrottle, type UnlockDeps } from "../src/lib/ai-unlock";
+import { attemptUnlock, codeConfigured, codeMatches, createUnlockToken, isUnlocked, UNLOCK_TTL_SECONDS, unlockKey, unlockRequired, unlockThrottle, type UnlockDeps } from "../src/lib/ai-unlock";
 import { createSessionToken, deriveKey } from "../src/lib/backend/demo/crypto";
 import { handleChat } from "../src/lib/chat-service";
 import { admin, alice, fakeRepo } from "./ai-chat-helpers";
@@ -15,6 +15,27 @@ const REDIS_TOKEN = "tok_" + "z".repeat(24);
 
 const throttle = (max = 5) => createMemoryRateLimiter({ maxCalls: max, windowMs: 900_000, now: () => T0 });
 const deps = (over: Partial<UnlockDeps> = {}): UnlockDeps => ({ expected: CODE, key: KEY, throttle: throttle(), clientKey: "ip:1.2.3.4", userId: "u-alice", now: () => T0, ...over });
+
+describe("when the code is required", () => {
+  const env = (e: Record<string, string>) => e as unknown as NodeJS.ProcessEnv;
+  it("is waived only on Vercel Preview deployments (behind Vercel login) and on local development", () => {
+    assert.equal(unlockRequired(env({ VERCEL_ENV: "preview", NODE_ENV: "production" })), false);
+    assert.equal(unlockRequired(env({ NODE_ENV: "development" })), false);
+  });
+  it("is required on the public production deployment and anywhere unknown", () => {
+    assert.equal(unlockRequired(env({ VERCEL_ENV: "production", NODE_ENV: "production" })), true);
+    assert.equal(unlockRequired(env({ VERCEL_ENV: "development", NODE_ENV: "development" })), true);
+    assert.equal(unlockRequired(env({ NODE_ENV: "production" })), true);
+    assert.equal(unlockRequired(env({})), true);
+    assert.equal(unlockRequired(env({ NODE_ENV: "test" })), true);
+  });
+  it("the server action consults it before trusting the cookie, offering AI mode, and accepting a code", () => {
+    const src = readFileSync("src/app/(app)/chat/actions.ts", "utf8");
+    assert.match(src, /if \(!unlockRequired\(process\.env\)\) return true;/);
+    assert.match(src, /!unlockRequired\(process\.env\) \|\| codeConfigured/);
+    assert.match(src, /if \(!unlockRequired\(process\.env\)\) return \{ ok: true \};/);
+  });
+});
 
 describe("unlock code check", () => {
   it("accepts the exact code and nothing else", () => {

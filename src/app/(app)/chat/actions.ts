@@ -2,13 +2,14 @@
 
 import { cookies, headers } from "next/headers";
 import { getRepo, requireUser } from "@/lib/auth";
-import { attemptUnlock, codeConfigured, isUnlocked, MAX_CODE_INPUT, UNLOCK_COOKIE, UNLOCK_MESSAGES, UNLOCK_TTL_SECONDS, unlockKey, unlockThrottle } from "@/lib/ai-unlock";
+import { attemptUnlock, codeConfigured, isUnlocked, MAX_CODE_INPUT, UNLOCK_COOKIE, UNLOCK_MESSAGES, UNLOCK_TTL_SECONDS, unlockKey, unlockRequired, unlockThrottle } from "@/lib/ai-unlock";
 import { getBackend } from "@/lib/backend";
 import { chatRouter } from "@/lib/chat-model";
 import { handleChat, type ChatActionResult } from "@/lib/chat-service";
 
 /** True when the signed-in user holds a valid, unexpired AI unlock. Re-checked on every request; nothing is cached or trusted from the browser. */
 async function aiUnlocked(userId: string): Promise<boolean> {
+  if (!unlockRequired(process.env)) return true; // Vercel-login-protected Preview or local development only; see ai-unlock.ts
   const token = (await cookies()).get(UNLOCK_COOKIE)?.value;
   return isUnlocked(token, unlockKey(process.env), userId);
 }
@@ -28,13 +29,14 @@ export async function askBroko(message: string): Promise<ChatActionResult> {
 /** What the chat should offer: whether AI mode exists at all, and whether this user has unlocked it. Reveals no configuration. */
 export async function aiChatStatus(): Promise<{ available: boolean; unlocked: boolean }> {
   const user = await requireUser();
-  const available = chatRouter() !== null && codeConfigured(process.env.BROKO_AI_DEMO_CODE);
+  const available = chatRouter() !== null && (!unlockRequired(process.env) || codeConfigured(process.env.BROKO_AI_DEMO_CODE));
   return { available, unlocked: available && (await aiUnlocked(user.id)) };
 }
 
 /** Checks the shared demo code on the server and, if right, sets a signed, user-bound, time-limited cookie. */
 export async function unlockAiChat(code: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireUser();
+  if (!unlockRequired(process.env)) return { ok: true };
   if (typeof code !== "string" || code.length > MAX_CODE_INPUT || chatRouter() === null) return { ok: false, error: UNLOCK_MESSAGES.unavailable };
   const forwarded = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim().slice(0, 64);
   const result = await attemptUnlock(
