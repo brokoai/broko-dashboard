@@ -71,11 +71,14 @@ const SUMMARY_RE = /\b(summary|summari[sz]e (everything|all|my day|it all)|overv
 export const SUMMARY_PARTS: DataIntent[] = ["pending_tasks", "overdue", "today", "notifications", "ai_inbox"];
 const MAX_PARTS = 4;
 
+/** Generic wording ("messages", "DMs") that says nothing about WHICH channel; ignored when the AI Inbox is what was asked about. */
+const GENERIC_MESSAGE_RE = /\b(messages?|dms?|conversations?)\b/;
+
 const DOMAIN_MATCHERS: [SourceId[], RegExp][] = [
   [["email"], /\b(e-?mails?|mail|outlook|gmail)\b/],
   [["whatsapp"], /\b(whatsapp|text messages?|texts)\b/],
   [["teams"], /\b(teams|chats?|channels?)\b/],
-  [["email", "teams", "whatsapp"], /\b(messages?|dms?|conversations?)\b/],
+  [["email", "teams", "whatsapp"], GENERIC_MESSAGE_RE],
   [["calendar"], /\b(calendar|meetings?|appointments?)\b/],
   [["crm"], /\b(crm|leads?|customers?|clients?|deals?)\b/],
   [["documents"], /\b(documents?|files?|contracts?|onedrive|attachments?)\b/],
@@ -106,7 +109,7 @@ export function routeIntent(raw: string): RoutedIntent {
   parts = parts.slice(0, wantsSummary ? SUMMARY_PARTS.length : MAX_PARTS);
 
   const aiInboxAsked = parts.includes("ai_inbox");
-  const domains = [...new Set(DOMAIN_MATCHERS.filter(([, re]) => re.test(text)).flatMap(([ids]) => ids))].filter((d) => !(aiInboxAsked && d === "email"));
+  const domains = [...new Set(DOMAIN_MATCHERS.filter(([, re]) => re.test(text) && !(aiInboxAsked && re === GENERIC_MESSAGE_RE)).flatMap(([ids]) => ids))].filter((d) => !(aiInboxAsked && d === "email"));
 
   let priority: PriorityFilter | undefined;
   if (parts.includes("priority")) {

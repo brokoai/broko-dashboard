@@ -40,6 +40,17 @@ describe("phase 1: intent coverage", () => {
     assert.equal(routeIntent("low priority tasks").priority, "low");
   });
 
+  it("the generic word 'messages' in an AI Inbox question is not reported as a channel the user mentioned", () => {
+    for (const q of ["How many messages are waiting in the AI inbox?", "How many AI inbox messages need review?"]) {
+      const r = routeIntent(q);
+      assert.equal(r.intent, "ai_inbox", q);
+      assert.deepEqual(r.domains, [], q);
+    }
+    // Explicit channel names are still reported, and generic wording alone (no AI Inbox) still is.
+    assert.deepEqual(routeIntent("any WhatsApp messages in the AI inbox?").domains, ["whatsapp"]);
+    assert.deepEqual(routeIntent("show my messages").domains, ["email", "teams", "whatsapp"]);
+  });
+
   it("every requested change is classified into a specific action kind", () => {
     const k = (q: string) => routeIntent(q).action;
     assert.equal(k("Create a task to call the landlord"), "create_task");
