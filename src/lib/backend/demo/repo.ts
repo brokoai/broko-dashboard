@@ -5,7 +5,7 @@ import type {
   AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
 } from "@/lib/types";
 import { INTEGRATION_ORDER } from "@/lib/types";
-import { UserFacingError, type Repo } from "../types";
+import { UserFacingError, type AiInboxRepo, type Repo } from "../types";
 import type { ClassifierSelection } from "@/lib/ai-brain";
 import { createDemoAiInbox } from "./ai-inbox";
 import type { DemoAiRuntime } from "./ai-runtime";
@@ -32,7 +32,7 @@ const FULL = "Demo storage is full. Use “Reset demo” to start over.";
 const nameOf = (id: string | null) => DEMO_USERS.find((u) => u.id === id)?.full_name ?? null;
 
 /** DEMO BACKEND ONLY: synthetic data, per-visitor, bounded. Never connects to anything real. */
-export function createDemoRepo(user: Profile, store: StateStore, now: () => number = Date.now, opts: { classifier?: ClassifierSelection; runtime?: DemoAiRuntime } = {}): Repo {
+export function createDemoRepo(user: Profile, store: StateStore, now: () => number = Date.now, opts: { classifier?: ClassifierSelection; runtime?: DemoAiRuntime } = {}): Repo & { aiInbox: AiInboxRepo } {
   const admin = user.role === "admin";
   const visible = (t: Task) => admin || t.assigned_to === user.id || t.created_by === user.id;
   const load = async () => decodeState(await store.read());
@@ -100,6 +100,8 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
 
   return {
     aiInbox,
+    aiInboxCounts: aiInbox,
+    aiInboxWriter: aiInbox,
     async listTasks() { return visibleTasks(); },
     async getTask(id) { return (await visibleTasks()).find((t) => t.id === id) ?? null; },
     async taskCounts(): Promise<TaskCounts> {

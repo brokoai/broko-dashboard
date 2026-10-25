@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { resetDemo, signOut } from "@/app/login/actions";
+import { BrokoChat } from "@/components/broko-chat";
 import { Avatar, cx } from "@/components/ui";
 import { ROLE_LABEL, type AppNotification, type Profile } from "@/lib/types";
 
@@ -227,6 +228,7 @@ export function AppShell({ user, notifications, demo, children }: { user: Profil
         </div>
       )}
       <main className="safe-px min-w-0 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 sm:pt-5">{children}</main>
+      <BrokoChat demo={demo} />
     </div>
   );
 }

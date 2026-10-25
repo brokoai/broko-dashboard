@@ -5,7 +5,7 @@ import {
 import { InMemoryAuditSink } from "@/lib/ai-brain";
 import { checkTaskChange } from "@/lib/permissions";
 import type { ActivityEvent, Profile, TaskInput } from "@/lib/types";
-import { UserFacingError, type AiInboxRepo, type AiInboxView, type AiJobView, type AiReviewInput } from "../types";
+import { UserFacingError, type AiInboxCounts, type AiInboxRepo, type AiInboxView, type AiJobView, type AiReviewInput } from "../types";
 import { DEMO_FIXTURES, DEMO_OWNER_RULES, fixtureKeys, runtimeFor, type DemoAiRuntime } from "./ai-runtime";
 import { LIMITS } from "./state";
 import { DEMO_USERS } from "./users";
@@ -135,6 +135,15 @@ export function createDemoAiInbox(
         duplicates_suppressed: jobs.filter((j) => j.outcome === "duplicate").length,
         classifier: { mode: selection.mode, model: selection.model, note: selection.note },
       };
+    },
+
+    /** Admin check first. Only statuses are tallied; the view model is dropped before anything is returned. */
+    async counts(): Promise<AiInboxCounts> {
+      requireAdmin();
+      const { messages, mode } = await this.view();
+      const by_status: Record<string, number> = {};
+      for (const m of messages) by_status[m.status] = (by_status[m.status] ?? 0) + 1;
+      return { mode, by_status, total: messages.length };
     },
 
     async process() {

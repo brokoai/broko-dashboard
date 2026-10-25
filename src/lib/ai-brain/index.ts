@@ -22,4 +22,5 @@ export { AiWorker, TransientClassificationError, type DrainSummary, type WorkerC
 export { auditEventKey, type MessageFetcher } from "./ports";
 export { InMemoryAuditSink, InMemoryProcessingStore, SyntheticEmailProvider, UnconfiguredEmailProvider, UnconfiguredNotifier } from "./memory";
 export { ingestFromProvider, processMessage, reviewMessage, type IngestSummary, type PipelineDeps, type PipelineResult, type ReviewDecision, type ReviewResult } from "./pipeline";
+export { ChatInputError, MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS, askBrain, routeIntent, type BrainChatContext, type ChatReply, type ChatTurn, type SourceReport } from "./chat";
 export { DUPLICATE_OF_VIEWING, SYNTHETIC_EMAILS, SYNTHETIC_NOW, longEmail } from "./fixtures";
