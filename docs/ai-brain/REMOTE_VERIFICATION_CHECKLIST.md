@@ -4,7 +4,7 @@
 Supabase setting has been changed. This is a procedure for a *separate*, explicitly approved step. Every box below is unchecked
 and must stay so until the person who owns the project says "go" for that specific step.
 
-Related: `docs/SUPABASE_SECURITY_STATUS.md`, `docs/SUPABASE_CLI_ROLE_MODEL.md`, `docs/ai-brain/INTEGRATION.md`.
+Related: `docs/ai-brain/AI_INBOX_READINESS.md` (read-only AI Inbox, open decisions, owner approvals), `docs/SUPABASE_SECURITY_STATUS.md`, `docs/SUPABASE_CLI_ROLE_MODEL.md`, `docs/ai-brain/INTEGRATION.md`.
 
 ## 0. What is and is not proven today
 
@@ -12,7 +12,7 @@ Related: `docs/SUPABASE_SECURITY_STATUS.md`, `docs/SUPABASE_CLI_ROLE_MODEL.md`, 
 | --- | --- | --- |
 | SQL syntax, privileges, RLS, job id contract, audit value checks, upgrade path | PGlite scripts (single in-process connection) and static text pins | No |
 | `FOR UPDATE SKIP LOCKED` stops two workers claiming one job | Pinned in SQL text; two real connections on a **local** PostgreSQL 18.4 (2026-10-25, see section 8): passed, and the test fails when the control is removed | Local only; **not Supabase** |
-| Approval row lock gives one task per approval | Same local run: one task, loser gets 55000. Without the row lock the loser gets 23505 instead; the partial unique index on `tasks(source, external_reference)` (0002) is what prevents the duplicate | Local only; **not Supabase** |
+| Approval row lock gives one task per approval | Same local run: one task, loser gets 55000. Without the row lock the loser gets 23505 instead; the partial unique index on `tasks(source, external_reference)` (0003, `tasks_source_external_reference_uidx`) is what prevents the duplicate | Local only; **not Supabase** |
 | Stale lease cannot overwrite a newer claim (fence on owner + attempt) | Single-session test, plus the same local two-connection run: stale complete returned false | Local only; **not Supabase** |
 | Behaviour on Supabase's real roles, extensions, default privileges | Modelled in PGlite from read-only catalog queries of `broko-dev` | **No, unverified** |
 
@@ -30,11 +30,22 @@ Related: `docs/SUPABASE_SECURITY_STATUS.md`, `docs/SUPABASE_CLI_ROLE_MODEL.md`, 
 
 | Order | File | Notes |
 | --- | --- | --- |
-| 1 | `supabase/migrations/0001_init.sql` | Already the baseline; includes last-admin guard changes. |
-| 2 | `supabase/proposed/0002_hardening.proposed.sql` | Apply with 0001 as one reviewed unit. |
-| 3 (optional) | `supabase/proposed/0006_profiles_privacy.proposed.sql` | Independent. |
-| 4 (optional) | `supabase/proposed/0005_default_privileges.proposed.sql` | Optional hardening; see its header. |
-| 5, only with the AI Inbox integration | `supabase/proposed/0003_ai_brain.proposed.sql`, then `0004_ai_jobs.proposed.sql` | **Marked NOT APPROVED FOR APPLICATION.** Do not apply them for any other reason. |
+| 1 | `supabase/migrations/0001_init.sql` | Baseline; includes last-admin guard. |
+| 2 | `supabase/proposed/0002_hardening.proposed.sql` | Same push as 0001. **Prerequisite of 0003**: 0003 replaces the `tasks_guard` that 0002 creates. |
+| 3 | `supabase/proposed/0003_ai_brain.proposed.sql` | `ai_messages` and the approve / reject functions. **NOT APPROVED FOR APPLICATION.** |
+| 4 | `supabase/proposed/0004_ai_jobs.proposed.sql` | `ai_jobs` and the worker functions. **NOT APPROVED FOR APPLICATION.** |
+| 5 | `supabase/proposed/0006_profiles_privacy.proposed.sql` | Depends on 0001 only (profiles); placed last so the sequence is the one planned for the AI Inbox milestone. |
+| not in this milestone | `supabase/proposed/0005_default_privileges.proposed.sql` | **Excluded from the AI Inbox milestone.** Changes platform defaults for every future object; a separate owner decision. |
+
+**Sequence for the AI Inbox milestone: 0001 -> 0002 -> 0003 -> 0004 -> 0006, in ONE `supabase db push`.** Supabase applies pending
+migrations in ascending version order, and refuses a local migration that is older than the newest remote one unless
+`--include-all` is given; applying them in one push avoids that. The proposed files are NOT renamed, moved or numbered by this
+step: how they become migrations (filenames without `.proposed`, a `supabase/config.toml`, CLI 2.122 behaviour) is unverified and
+is an owner-approved step of its own. The earlier "apply each file in its own step" advice in section 4 applies to *verification*
+(run section 5 after each file), which needs a disposable branch, not to the push itself.
+
+Hard dependencies: 0002 needs 0001. 0003 needs 0001 and 0002 (it replaces `tasks_guard`, and its comments and approval function assume the
+0002 `source` rule). 0004 needs 0001 (`is_admin`, `touch_updated_at`) and 0003 (`ai_record_audit_event`). 0006 needs 0001 only.
 
 Exact file hashes to record before applying: `sha256sum` of each file above, written into the approval note.
 
@@ -47,7 +58,7 @@ select current_database(), current_user, version();
 select rolname, rolsuper, rolcreaterole, rolbypassrls from pg_roles where rolname in ('postgres','authenticated','anon','service_role');
 select n.nspname, c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity, pg_get_userbyid(c.relowner) owner
   from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p','v') order by 1,2;
-select * from supabase_migrations.schema_migrations order by version;   -- what is already applied
+select version, name from supabase_migrations.schema_migrations order by version;   -- what is already applied
 select count(*) from public.profiles; select count(*) from public.tasks;  -- know what data exists
 ```
 
@@ -58,10 +69,19 @@ select count(*) from public.profiles; select count(*) from public.tasks;  -- kno
 
 - [ ] Backup exists and was restored once somewhere disposable (a dashboard backup or `pg_dump` taken by the owner), or the target is
       confirmed empty/disposable.
-- [ ] Rollback is written down per file before applying: dropping the objects the file creates (functions, triggers, tables) and
-      restoring changed grants from the catalog snapshot in section 3. Migrations 0003/0004 add objects only; 0001/0002 change
-      guards and grants, so the section 5 snapshot is the rollback reference.
-- [ ] Apply each file in its own step, running section 5 after each.
+- [ ] Rollback is written down per file before applying. The rollback implications are NOT symmetric:
+  - **0003 / 0004** add objects (tables, functions, indexes). Rolling back means dropping those objects and restoring the 0002
+    `tasks_guard` definition (0003 replaced it). Nothing else is altered.
+  - **0002** is not independently reversible once 0003 is applied: it creates `tasks_guard`, `integrations_guard`, an index on `activity_events(actor_id)` and
+    changes `guard_profile_update` / `tasks_log_activity`. Reverting it means re-creating the 0001 definitions of the replaced
+    functions, dropping the two triggers and the index, and restoring grants from the section 5 snapshot. Roll back 0004, then
+    0003, then 0002, in that order.
+  - **0001** is the baseline: it creates every core table, trigger, policy and grant, and `handle_new_user` on `auth.users`. A rollback
+    is a destructive drop of application data (profiles, tasks, activity, notifications, integrations) and of the trigger on
+    `auth.users`. It is acceptable ONLY on a project that holds nothing anyone needs; otherwise restore from backup. There is no
+    "undo 0001" that preserves data.
+  - **0006** changes column privileges on `profiles`; reversing it is a re-grant, so the section 3 snapshot is the reference.
+- [ ] Verification is stepwise on a disposable branch (run section 5 after each file); the real push is the single ordered one from section 2.
 
 ## 5. Catalog queries to run after applying (read-only; save the output)
 

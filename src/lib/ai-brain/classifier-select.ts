@@ -1,4 +1,5 @@
-import { ClassificationError, LlmClassifier, RuleBasedClassifier, anthropicTransport, classifyWithInfo, type Classifier, type LlmTransport } from "./classifier";
+import { createModelTransport } from "./model-transport";
+import { ClassificationError, LlmClassifier, RuleBasedClassifier, classifyWithInfo, type Classifier, type LlmTransport } from "./classifier";
 import type { AiBrainConfig } from "./config";
 import { MessageAnalysisSchema, type ClassifierInfo, type NormalizedMessage } from "./schema";
 
@@ -100,9 +101,8 @@ export const rulesSelection = (note: string | null = null): ClassifierSelection 
  */
 export function selectClassifier(cfg: AiBrainConfig, deps: { transport?: LlmTransport; now?: () => number } = {}): ClassifierSelection {
   if (cfg.classifier !== "llm") return rulesSelection();
-  const key = cfg.apiKey;
-  if (!deps.transport && !key) return rulesSelection("The model classifier was requested but no API key is configured, so the rule-based classifier is being used.");
-  const transport = deps.transport ?? anthropicTransport({ apiKey: key as string, model: cfg.llm.model, timeoutMs: 20_000 });
+  const transport = deps.transport ?? createModelTransport(cfg, { timeoutMs: 20_000 });
+  if (!transport) return rulesSelection("The model classifier was requested but no API key is configured, so the rule-based classifier is being used.");
   const model = new LlmClassifier(transport, `llm:${cfg.llm.model}`);
   const rules = new RuleBasedClassifier();
   const classifier = new CachingClassifier(new FallbackClassifier(model, rules, { now: deps.now }), { now: deps.now });

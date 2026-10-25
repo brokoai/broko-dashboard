@@ -14,6 +14,7 @@ export { ActivityMetadataSchema, describeAudit, metadataOf, parseActivityMetadat
 export { buildTaskInput, sourceRef } from "./task-mapping";
 export { isValidReviewId, reviewIdFor, toMessageView, type AiMessageView } from "./view";
 export { loadAiBrainConfig, DEFAULT_MODEL, type AiBrainConfig } from "./config";
+export { createModelTransport } from "./model-transport";
 export type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, ProviderConnection, TaskActor, TaskSink, TaskSinkContext } from "./ports";
 export { TaskSinkDenied } from "./ports";
 export { JOB_DEFAULTS, JOB_ID_RE, backoffMs, isValidJobId, jobId, jobKey, type JobClaim, type JobRecord, type JobStore } from "./jobs";
@@ -22,4 +23,5 @@ export { AiWorker, TransientClassificationError, type DrainSummary, type WorkerC
 export { auditEventKey, type MessageFetcher } from "./ports";
 export { InMemoryAuditSink, InMemoryProcessingStore, SyntheticEmailProvider, UnconfiguredEmailProvider, UnconfiguredNotifier } from "./memory";
 export { ingestFromProvider, processMessage, reviewMessage, type IngestSummary, type PipelineDeps, type PipelineResult, type ReviewDecision, type ReviewResult } from "./pipeline";
+export { ChatInputError, MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS, askBrain, routeIntent, type BrainChatContext, type ChatReply, type ChatTurn, type SourceReport } from "./chat";
 export { DUPLICATE_OF_VIEWING, SYNTHETIC_EMAILS, SYNTHETIC_NOW, longEmail } from "./fixtures";

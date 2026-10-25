@@ -46,8 +46,10 @@ export default async function InboxPage() {
   const [view, people, activity] = await Promise.all([repo.aiInbox.view(), repo.listPeople(), repo.listActivity(200)]);
   const aiActivity = activity.filter((e) => e.metadata).slice(0, 20);
   // Start the background worker AFTER this response is sent. The page itself never classifies or waits for the model.
-  const inbox = repo.aiInbox;
-  if (queueActive(view.queue)) after(async () => { try { await inbox.process(); } catch (e) { console.error("[ai-inbox] background run failed", e); } });
+  // Writes exist only when the backend provides a writer. A read-only backend never runs the worker from this page.
+  const writer = repo.aiInboxWriter;
+  const canWrite = writer !== undefined;
+  if (writer && queueActive(view.queue)) after(async () => { try { await writer.process(); } catch (e) { console.error("[ai-inbox] background run failed", e); } });
   const rows: InboxRow[] = view.messages.map((m) => {
     const { workflow_id } = m;
     return {
@@ -64,6 +66,17 @@ export default async function InboxPage() {
   return (
     <>
       <PageTitle title="AI Inbox">The AI reads incoming messages and proposes tasks. A person approves each one before anything is created.</PageTitle>
+      {view.mode === "live" && (
+        <div role="note" data-testid="live-banner" className="mb-4 rounded-lg border border-line bg-surface p-4 text-sm text-fg">
+          <p className="font-semibold">Live data from your database.</p>
+        </div>
+      )}
+      {!canWrite && (
+        <div role="note" data-testid="read-only-banner" className="mb-4 rounded-lg border border-line bg-surface p-4 text-sm text-fg">
+          <p className="font-semibold">Read-only view.</p>
+          <p className="mt-1 text-muted">Approving, rejecting and processing messages are not enabled for this backend. Nothing here can change a message or create a task.</p>
+        </div>
+      )}
       {view.mode === "synthetic" && (
         <div role="note" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-semibold">Synthetic sample messages. This is not a live mailbox.</p>
@@ -86,10 +99,10 @@ export default async function InboxPage() {
           </div>
         ))}
       </dl>
-      <AiQueuePanel jobs={view.jobs} queue={view.queue} workerNote={view.mode === "synthetic" ? "Messages are classified by a background worker, never while this page loads. In this demo the worker runs in the server process and is not durable: it restarts empty and is not a production queue." : "Messages are classified by a background worker."} />
+      <AiQueuePanel canWrite={canWrite} jobs={view.jobs} queue={view.queue} workerNote={view.mode === "synthetic" ? "Messages are classified by a background worker, never while this page loads. In this demo the worker runs in the server process and is not durable: it restarts empty and is not a production queue." : "Messages are classified by a background worker."} />
       {view.messages.length === 0 ? (
         <Card><EmptyState icon={<Inbox size={22} />} title="Nothing to review yet">{queueActive(view.queue) ? "Messages are still being processed. This page updates by itself." : "No messages have been processed."}</EmptyState></Card>
-      ) : <AiInboxList rows={rows} people={people} />}
+      ) : <AiInboxList rows={rows} people={people} canReview={canWrite} />}
       <Card title="AI activity" className="mt-4">
         <p className="mb-3 text-sm text-muted">
           What the AI workflow did, without email content. {view.mode === "synthetic" && "These events are regenerated from the synthetic sample emails on every visit; your approvals and rejections are remembered in this browser for up to 24 hours and are not stored in a database."}

@@ -1,15 +1,19 @@
 -- ============================================================================
 -- PROPOSED, NOT APPLIED to any remote database. Verified only on a local PostgreSQL (PGlite): see supabase/proposed/tests/.
 -- Fixes for the findings in docs/SECURITY_AND_MIGRATION_REVIEW.md and docs/SUPABASE_SECURITY_STATUS.md.
--- Depends on 0001_init.sql and is meant to be applied WITH it: 0001 alone leaves task reassignment (H-1) to the application.
+-- Depends on 0001_init.sql and is meant to be applied after it, in the same push: 0001 alone leaves task reassignment (H-1) to the
+-- application. 0003 REPLACES tasks_guard created here (see "tasks_guard" in docs/ai-brain/AI_INBOX_READINESS.md), so 0002 is a
+-- prerequisite of 0003 and rolling 0002 back is not independent of 0003.
 -- These guards are the database-side enforcement of: who may be assigned a task, which task columns are server-controlled,
 -- and who may set an integration's connection state. Deliberately outside supabase/migrations/ so no tooling picks it up.
 -- ============================================================================
 
 -- M-2 / M-3: profile guard.
--- 0001 raises for EVERY caller that is not an admin session, including the SQL editor and
--- the service role (auth.uid() is null), so the documented "promote first admin" step fails.
--- Allow trusted maintenance paths; also stop members editing their own email.
+-- CORRECTED COMMENT (the previous text described an older 0001). The current 0001 guard_profile_update already lets trusted
+-- maintenance paths through (auth.uid() is null: SQL editor, service role, migrations), so promoting the first admin works
+-- with 0001 alone. What 0001 does NOT cover is the email column, and what it leaves open is a member editing their own email.
+-- This replacement keeps the same bypass and adds the email check. (0001's separate profiles_keep_an_admin trigger has NO
+-- bypass and is not touched here.)
 -- ---- run as postgres, then put the session back exactly as it was (see docs/SUPABASE_CLI_ROLE_MODEL.md) ----
 -- On the dev project the CLI's login role (cli_login_postgres) is a member of postgres with SET but NOT INHERIT and has no
 -- CREATE on schema public, so objects can only be created after SET ROLE postgres (this also makes postgres the owner).

@@ -1,12 +1,15 @@
 import type { Task } from "@/lib/types";
 
 // Due dates are calendar dates, handled in UTC so server and client always agree.
-const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 export const todayKey = () => dayKey(new Date());
 
-export const isActive = (t: Task) => t.status === "open" || t.status === "in_progress";
-export const isDueToday = (t: Task) => isActive(t) && !!t.due_at && dayKey(new Date(t.due_at)) === todayKey();
-export const isOverdue = (t: Task) => isActive(t) && !!t.due_at && dayKey(new Date(t.due_at)) < todayKey();
+export const isActive = (t: Pick<Task, "status">) => t.status === "open" || t.status === "in_progress";
+/** The `...On` variants take the reference day explicitly (used where the clock must be injectable, e.g. the AI chat). */
+export const isDueOn = (t: Pick<Task, "status" | "due_at">, day: string) => isActive(t) && !!t.due_at && dayKey(new Date(t.due_at)) === day;
+export const isOverdueOn = (t: Pick<Task, "status" | "due_at">, day: string) => isActive(t) && !!t.due_at && dayKey(new Date(t.due_at)) < day;
+export const isDueToday = (t: Task) => isDueOn(t, todayKey());
+export const isOverdue = (t: Task) => isOverdueOn(t, todayKey());
 
 export function formatDate(iso: string | null): string {
   if (!iso) return "—";

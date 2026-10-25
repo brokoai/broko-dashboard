@@ -9,7 +9,7 @@ const PATTERNS: { id: string; re: RegExp }[] = [
   { id: "ignore_previous_instructions", re: /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,30}\b(instructions?|prompts?|rules?|guidelines?|policy|policies)\b/i },
   { id: "role_hijack", re: /\b(you are now|from now on you|act as (an?|the)|pretend (to be|you are)|new (instructions?|role|persona)|developer mode|jailbreak)\b/i },
   { id: "system_prompt_probe", re: /\b(system prompt|developer message|hidden (instructions?|prompt)|your (instructions?|prompt|configuration))\b/i },
-  { id: "secret_exfiltration", re: /\b(reveal|show|print|send|share|leak|output|email me|forward)\b[^.\n]{0,50}\b(api[- ]?keys?|secrets?|passwords?|tokens?|credentials?|private keys?|environment variables?|\.env)\b/i },
+  { id: "secret_exfiltration", re: /\b(reveal|show|print|send|share|leak|output|email me|forward)\b[^.\n]{0,50}(?:\b(api[- ]?keys?|secrets?|passwords?|tokens?|credentials?|private keys?|environment variables?)\b|\.env\b)/i },
   { id: "approval_bypass", re: /\b(skip|bypass|disable|turn off|without)\b[^.\n]{0,30}\b(approval|review|verification|checks?|safeguards?)\b|\bauto[- ]?approve\b|\bdo not (flag|escalate|review)\b/i },
   { id: "action_command", re: /\b(execute|run)\b[^.\n]{0,30}\b(this|the following)?\s*(command|script|code|query)\b|\b(rm -rf|curl\s+https?:|powershell|wget\s+https?:|drop table|<script)\b/i },
   { id: "config_change", re: /\b(change|update|set|modify)\b[^.\n]{0,30}\b(owner rules?|assignment rules?|policy|configuration|permissions?|admin(istrator)?s?)\b/i },

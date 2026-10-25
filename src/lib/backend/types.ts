@@ -51,13 +51,34 @@ export interface AiInboxView {
   classifier: { mode: "rules" | "llm"; model: string | null; note: string | null };
 }
 
+/** Status counts of AI Inbox messages. No subject, sender, excerpt or any other message content, by construction. */
+export interface AiInboxCounts {
+  /** Same meaning as `AiInboxView.mode`: "synthetic" is demo data, never a live mailbox. */
+  mode: "synthetic" | "live";
+  /** Messages per status (e.g. REVIEW_REQUIRED). Statuses with no message are absent. */
+  by_status: Record<string, number>;
+  total: number;
+}
+
 /**
- * AI Inbox access. OPTIONAL: a backend without it (e.g. Supabase before migration 0003 is approved)
- * shows "not connected". Implementations must themselves enforce: administrators only, the existing
- * assignment rule, and atomic one-time approval. See docs/ai-brain/INTEGRATION.md.
+ * Counts only. Used by the chat assistant. An implementation MUST refuse non-administrators before querying anything, and
+ * MUST select only the status column, so a member cannot infer inbox counts and nothing readable leaves the database.
  */
-export interface AiInboxRepo {
+export interface AiInboxCountsReader {
+  counts(): Promise<AiInboxCounts>;
+}
+
+/** Read-only AI Inbox page data. Administrators only. Exposing this does NOT enable approve / reject / process / requeue. */
+export interface AiInboxReader {
   view(): Promise<AiInboxView>;
+}
+
+/**
+ * Write-capable AI Inbox operations. A backend that has not been verified for writes MUST NOT provide this: the page shows
+ * approve / reject / process / requeue controls only when `Repo.aiInboxWriter` exists. Implementations must themselves
+ * enforce: administrators only, the existing assignment rule, and atomic one-time approval. See docs/ai-brain/INTEGRATION.md.
+ */
+export interface AiInboxWriter {
   /** Runs the worker once over whatever is due. Administrators only. Never creates tasks. */
   process(): Promise<{ completed: number; retried: number; failed: number }>;
   /** Puts a failed job back in the queue. `jobId` is the public job id (12 hex characters, `AiJobView.id`). Administrators only; records who did it. */
@@ -65,6 +86,9 @@ export interface AiInboxRepo {
   /** `reviewId` is the opaque id from the view model; the backend maps it to its record. */
   review(reviewId: string, input: AiReviewInput): Promise<ReviewResult>;
 }
+
+/** Everything the demo backend implements. Real backends implement the narrower interfaces above, independently. */
+export type AiInboxRepo = AiInboxReader & AiInboxCountsReader & AiInboxWriter;
 
 /**
  * Data contract the dashboard needs. A backend (Supabase, AWS, ...) implements this,
@@ -87,8 +111,12 @@ export interface Repo {
   /** Aggregate counts per team member (no task contents). */
   teamWorkload(): Promise<TeamMember[]>;
   listNotifications(): Promise<AppNotification[]>;
-  /** Absent when this backend has no AI Inbox persistence. */
-  aiInbox?: AiInboxRepo;
+  /** Read-only AI Inbox page data. Absent when this backend has no AI Inbox persistence ("not connected"). */
+  aiInbox?: AiInboxReader;
+  /** Counts only, for the chat assistant. Absent = not connected. Independent of `aiInbox`. */
+  aiInboxCounts?: AiInboxCountsReader;
+  /** Approve / reject / process / requeue. Absent on every backend not verified for writes (all of them except the demo today). */
+  aiInboxWriter?: AiInboxWriter;
 }
 
 export interface Backend {

@@ -11,7 +11,8 @@ import type { AiJobView } from "@/lib/backend/types";
  * Processing state of the background jobs. While anything is queued, running or waiting to retry, the page refreshes itself
  * (at most 20 times) so the reviewer sees progress without the page ever waiting on the model.
  */
-export function AiQueuePanel({ jobs, queue, workerNote }: { jobs: AiJobView[]; queue: Record<string, number>; workerNote: string }) {
+/** `canWrite` is false for a read-only backend: counts and jobs are shown, but "Process queue now" and "Retry" are not rendered. */
+export function AiQueuePanel({ jobs, queue, workerNote, canWrite }: { jobs: AiJobView[]; queue: Record<string, number>; workerNote: string; canWrite: boolean }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
@@ -30,7 +31,7 @@ export function AiQueuePanel({ jobs, queue, workerNote }: { jobs: AiJobView[]; q
   const retry = (id: string) => start(async () => { setError(""); const r = await requeueAiJob(id); if (r.error) setError(r.error); else router.refresh(); });
 
   return (
-    <Card title="Background processing" className="mb-4" action={<button type="button" disabled={pending} onClick={run} className={cx(btn.base, btn.secondary)}>Process queue now</button>}>
+    <Card title="Background processing" className="mb-4" action={canWrite ? <button type="button" disabled={pending} onClick={run} className={cx(btn.base, btn.secondary)}>Process queue now</button> : undefined}>
       <p className="mb-3 text-sm text-muted">{workerNote}</p>
       <ul className="mb-3 flex flex-wrap gap-2" aria-label="Job counts">
         {(["queued", "processing", "retry_wait", "completed", "failed"] as const).map((s) => (
@@ -49,7 +50,7 @@ export function AiQueuePanel({ jobs, queue, workerNote }: { jobs: AiJobView[]; q
                 <span className="ml-2 text-xs text-muted">ref {j.id}</span>
                 {j.audit_failed && <span className="block text-xs text-brand-dark">Some audit events for this job could not be recorded.</span>}
               </div>
-              {j.status === "failed" && <button type="button" disabled={pending} onClick={() => retry(j.id)} className={cx(btn.base, btn.secondary)}>Retry</button>}
+              {canWrite && j.status === "failed" && <button type="button" disabled={pending} onClick={() => retry(j.id)} className={cx(btn.base, btn.secondary)}>Retry</button>}
             </li>
           ))}
         </ul>

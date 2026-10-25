@@ -10,7 +10,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 // deriveKey() refuses to use it when `allowDevFallback` is false (production-like environments).
 const DEV_ONLY_KEY_MATERIAL = "broko-local-development-demo-only";
 
-export type KeyPurpose = "session" | "state";
+export type KeyPurpose = "session" | "state" | "ai-unlock";
 
 export interface KeyMaterial {
   /** BROKO_DEMO_SESSION_SECRET */

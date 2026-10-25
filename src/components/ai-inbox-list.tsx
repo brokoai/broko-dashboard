@@ -81,7 +81,7 @@ function ReviewForm({ m, people, onDone }: { m: AiMessageView; people: Person[];
 
 export interface InboxRow { m: AiMessageView; workflow_id: string; job: AiJobView | null; events: ActivityEvent[] }
 
-function MessageCard({ row, people, nameOf }: { row: InboxRow; people: Person[]; nameOf: (id: string | null) => string }) {
+function MessageCard({ row, people, nameOf, canReview }: { row: InboxRow; people: Person[]; nameOf: (id: string | null) => string; canReview: boolean }) {
   const { m, job, events } = row;
   const [done, setDone] = useState<{ taskId: string | null; warning?: string } | null>(null);
   const st = STATUS[m.status] ?? { label: text(m.status), tone: "neutral" as Tone };
@@ -171,7 +171,7 @@ function MessageCard({ row, people, nameOf }: { row: InboxRow; people: Person[];
         </p>
       )}
 
-      {m.status === "REVIEW_REQUIRED" && !done && <ReviewForm m={m} people={people} onDone={(id, warning) => setDone({ taskId: id, warning })} />}
+      {canReview && m.status === "REVIEW_REQUIRED" && !done && <ReviewForm m={m} people={people} onDone={(id, warning) => setDone({ taskId: id, warning })} />}
 
       {events.length > 0 && (
         <details className="mt-3 text-sm">
@@ -192,10 +192,11 @@ function MessageCard({ row, people, nameOf }: { row: InboxRow; people: Person[];
   );
 }
 
-export function AiInboxList({ rows, people }: { rows: InboxRow[]; people: Person[] }) {
+/** `canReview` is false for a read-only backend: messages are listed but no approve / reject control is rendered. */
+export function AiInboxList({ rows, people, canReview }: { rows: InboxRow[]; people: Person[]; canReview: boolean }) {
   const names = new Map(people.map((p) => [p.id, p.full_name]));
   const nameOf = (id: string | null) => (id && names.get(id)) || "someone";
   const order: Record<string, number> = { REVIEW_REQUIRED: 0, FAILED: 1, TASK_CREATED: 2, NOTIFICATION_SENT: 2, REJECTED: 3, NO_ACTION: 4 };
   const sorted = [...rows].sort((x, y) => (order[x.m.status] ?? 5) - (order[y.m.status] ?? 5));
-  return <div className="grid gap-4">{sorted.map((row) => <MessageCard key={row.m.review_id} row={row} people={people} nameOf={nameOf} />)}</div>;
+  return <div className="grid gap-4">{sorted.map((row) => <MessageCard key={row.m.review_id} row={row} people={people} nameOf={nameOf} canReview={canReview} />)}</div>;
 }

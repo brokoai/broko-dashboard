@@ -28,8 +28,8 @@ export async function reviewAiMessage(reviewId: string, raw: unknown): Promise<R
   if ("error" in parsed) return { error: parsed.error };
   try {
     const repo = await getRepo(user);
-    if (!repo.aiInbox) return { error: "The AI Inbox is not connected to this backend." };
-    const result = await repo.aiInbox.review(reviewId, parsed.input);
+    if (!repo.aiInboxWriter) return { error: "Reviewing is not available on this backend." };
+    const result = await repo.aiInboxWriter.review(reviewId, parsed.input);
     if (!result.ok) return { error: result.message };
     revalidatePath("/", "layout");
     return {
@@ -46,8 +46,8 @@ export async function processAiQueue(): Promise<{ ok?: boolean; error?: string; 
   const user = await requireUser();
   try {
     const repo = await getRepo(user);
-    if (!repo.aiInbox) return { error: "The AI Inbox is not connected to this backend." };
-    const r = await repo.aiInbox.process();
+    if (!repo.aiInboxWriter) return { error: "Processing is not available on this backend." };
+    const r = await repo.aiInboxWriter.process();
     revalidatePath("/inbox");
     return { ok: true, ...r };
   } catch (e) {
@@ -61,8 +61,8 @@ export async function requeueAiJob(jobId: string): Promise<{ ok?: boolean; error
   if (!isValidJobId(jobId)) return { error: "Invalid request." };
   try {
     const repo = await getRepo(user);
-    if (!repo.aiInbox) return { error: "The AI Inbox is not connected to this backend." };
-    if (!(await repo.aiInbox.requeue(jobId))) return { error: "Only a failed job can be retried." };
+    if (!repo.aiInboxWriter) return { error: "Retrying is not available on this backend." };
+    if (!(await repo.aiInboxWriter.requeue(jobId))) return { error: "Only a failed job can be retried." };
     revalidatePath("/inbox");
     return { ok: true };
   } catch (e) {

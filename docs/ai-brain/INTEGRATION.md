@@ -8,7 +8,7 @@ reads a mailbox, calls a language model, or touches a database. Nothing has been
 
 | Piece | Where | Notes |
 | --- | --- | --- |
-| Optional backend capability | `Repo.aiInbox?: AiInboxRepo` in `src/lib/backend/types.ts` | `view()` and `review()`. A backend without it shows "not connected". |
+| Optional backend capabilities | `Repo.aiInbox?` (`view()`), `Repo.aiInboxCounts?` (`counts()`, chat), `Repo.aiInboxWriter?` (`process / requeue / review`) in `src/lib/backend/types.ts` | Independent. A backend without `aiInbox` shows "not connected"; the UI shows write controls only with `aiInboxWriter`. See `AI_INBOX_READINESS.md`. |
 | Demo implementation | `src/lib/backend/demo/ai-inbox.ts`, wired in `demo/repo.ts` | Runs the sample emails through the real pipeline per request. Only the visitor's decisions are stored. |
 | Task creation | Through the demo `Repo` task path (`createAiTask`) | `source = "email"`, `external_reference = synthetic-email:<n>`, creator = the reviewer. Deterministic id `ai<n>` makes approval idempotent. |
 | Review action | `src/app/(app)/inbox/actions.ts`, `src/lib/ai-review-input.ts` | Authenticates first, validates input, relays to the backend. Reviewer identity comes from the session only. |
