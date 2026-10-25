@@ -1,6 +1,6 @@
 # Floating Broko AI chat: the Brain's conversational entry point
 
-Status: read-only, deterministic, no language model. Phase 1 hardening applied (see "Phase 1 changes" at the end).
+Status: read-only. Deterministic by default; an OPTIONAL model interpreter (off unless `BROKO_AI_CHAT=llm` and a key is configured) can choose which read-only question a free-form sentence means. See "Model interpreter" at the end. Phase 1 hardening applied.
 
 ## Execution path (exact)
 
@@ -132,3 +132,28 @@ Retrieval became a registry of adapters with typed records, provenance, freshnes
 to 17 including ambiguity and unsupported handling; approval became a structured, policy-aware object (was: a link); replies gained
 grounding and "Not checked"; the UI gained retry, clarification buttons and a grounding line; `dates.ts` gained injectable-day
 helpers; `injection.ts` secret-exfiltration pattern fixed for `.env`.
+
+## Model interpreter (optional, off by default)
+
+One Brain, one provider configuration: `loadAiBrainConfig` -> `createModelTransport` (`src/lib/ai-brain/model-transport.ts`) is the only place a
+provider client is built; the email classifier and the chat both use it (same `ANTHROPIC_API_KEY`, same `BROKO_AI_MODEL`). The chat adds one
+switch, `BROKO_AI_CHAT=llm`; without it, or without a key, chat is exactly the deterministic router above and makes no model call.
+
+What the model does: only for a sentence the keyword router did NOT understand (`unsupported`, naming no unreadable source), it returns one JSON
+object (`chat/model-router.ts`, strict Zod schema) choosing a read-only data question (1-4 of the existing intents) or a kind of change request.
+What it never does: it is not asked or allowed to answer; it receives only the question (no user, role, tasks, emails, AI Inbox content or
+retrieved data) and has no tools. `blocked`, `help`, `clarify`, greetings, change requests and every deterministic data match are decided before
+and without it, so the injection tripwire and approval rules are unchanged. Retrieval, authorization (e.g. AI Inbox admin-only, member task scope),
+wording and the `executed:false` approval object stay deterministic. Anything invalid, slow, failing, cooling down or rate-limited returns to
+the deterministic result. A reply the model routed carries `routing: "model"` and the UI says so.
+
+Limits: 8 s timeout, 200 output tokens, 60 s cooldown after a failure, 20 model calls per user per 10 minutes through a `ModelRateLimiter`
+(atomic `take`, fail closed if the limiter throws). **Cost control is only real where the budget is shared:** the only limiter that exists
+is in memory (per process, empty after every restart or serverless cold start), so `resolveChatRouter` (`src/lib/chat-model.ts`) uses it only
+outside production. With `NODE_ENV=production` the model router is **not created** unless a limiter with `durable: true` is supplied; none exists
+yet (it needs an approved shared store), so production chat stays deterministic even if `BROKO_AI_CHAT=llm` and a key are set, and a one-line
+warning is logged. Plugging in a durable limiter later is one argument to `resolveChatRouter`. The cooldown is also per instance, but it only
+reduces wasted calls during an outage; it is not a cost cap. The model can at worst pick a different read-only question the user may already ask.
+Not done: model-written answers (would need a grounding check against retrieved records), conversation memory, and live verification against the real
+provider (tests use a scripted fake transport only; no call to the real API has been made).
+

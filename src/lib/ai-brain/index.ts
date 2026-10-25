@@ -14,6 +14,7 @@ export { ActivityMetadataSchema, describeAudit, metadataOf, parseActivityMetadat
 export { buildTaskInput, sourceRef } from "./task-mapping";
 export { isValidReviewId, reviewIdFor, toMessageView, type AiMessageView } from "./view";
 export { loadAiBrainConfig, DEFAULT_MODEL, type AiBrainConfig } from "./config";
+export { createModelTransport } from "./model-transport";
 export type { AuditEvent, AuditSink, EmailProvider, Notifier, ProcessingStore, ProviderConnection, TaskActor, TaskSink, TaskSinkContext } from "./ports";
 export { TaskSinkDenied } from "./ports";
 export { JOB_DEFAULTS, JOB_ID_RE, backoffMs, isValidJobId, jobId, jobKey, type JobClaim, type JobRecord, type JobStore } from "./jobs";

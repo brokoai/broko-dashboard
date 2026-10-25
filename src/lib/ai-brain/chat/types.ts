@@ -1,5 +1,6 @@
 import type { IntegrationStatus, Profile, TaskPriority, TaskStatus } from "@/lib/types";
 import type { Repo } from "@/lib/backend/types";
+import type { ChatRouter } from "./model-router";
 
 /** Every place the assistant may eventually read from. Most are NOT implemented; each one reports its true state. */
 export type SourceId = "tasks" | "activity" | "notifications" | "ai_inbox" | "integrations" | "email" | "teams" | "whatsapp" | "calendar" | "crm" | "documents";
@@ -110,6 +111,8 @@ export interface ChatReply {
   /** Set when the question is ambiguous: the assistant asks instead of guessing. */
   clarification?: { question: string; options: string[] };
   grounding: Grounding;
+  /** Present ("model") only when a language model chose WHICH read-only question to answer. The answer itself always comes from retrieved data. */
+  routing?: "model";
   notice?: string;
   generated_at: string;
 }
@@ -120,6 +123,8 @@ export interface BrainChatContext {
   /** Already scoped to `user` by the backend. The chat layer still re-applies the visibility rules (defence in depth). */
   repo: Repo;
   now: Date;
+  /** Optional model-backed interpreter for questions the deterministic router did not understand. Absent = deterministic only. */
+  router?: ChatRouter;
 }
 
 

@@ -74,6 +74,7 @@ export function ReplyView({ reply, onAsk }: { reply: ChatReply; onAsk?: (questio
         </div>
       )}
       {reply.notice && <p className="mt-2 text-xs text-amber-900">{reply.notice}</p>}
+      {reply.routing === "model" && <p className="mt-2 text-xs text-muted">An AI model chose which question to answer. The answer itself comes only from your data.</p>}
       {reply.grounding && (reply.grounding.sources_used.length > 0 || reply.grounding.facts > 0) && (
         <p className="mt-2 text-[11px] text-muted">
           {reply.mode === "demo" ? "Demo data. " : ""}Based on {reply.grounding.facts} record{reply.grounding.facts === 1 ? "" : "s"}

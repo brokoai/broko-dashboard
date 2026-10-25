@@ -76,7 +76,20 @@ export async function askBrain(ctx: BrainChatContext, message: string): Promise<
   if (!trimmed) throw new ChatInputError("Type a question first.");
   if (trimmed.length > MAX_MESSAGE_CHARS) throw new ChatInputError(`Please keep questions under ${MAX_MESSAGE_CHARS} characters.`);
 
-  return answer(ctx, routeIntent(trimmed));
+  let routed = routeIntent(trimmed);
+  let viaModel = false;
+  // The model is consulted ONLY for a sentence the deterministic router did not understand and that names no unreadable source.
+  // Blocked, action, help, clarify and every deterministic data match never reach it, so the tripwire and approval rules are
+  // unchanged. The model can only choose a read-only question; retrieval, authorization and wording below stay deterministic.
+  if (ctx.router && routed.intent === "unsupported" && routed.domains.length === 0) {
+    const m = await ctx.router.route(ctx.user.id, trimmed);
+    if (m) {
+      routed = { intent: m.intent, parts: m.parts, signals: [], domains: [], priority: m.priority, action: m.action };
+      viaModel = true;
+    }
+  }
+  const reply = await answer(ctx, routed);
+  return viaModel ? { ...reply, routing: "model" } : reply;
 }
 
 async function answer(ctx: BrainChatContext, routed: RoutedIntent): Promise<ChatReply> {

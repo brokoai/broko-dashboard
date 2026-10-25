@@ -1,4 +1,4 @@
-import { ChatInputError, askBrain, type ChatReply } from "@/lib/ai-brain/chat";
+import { ChatInputError, askBrain, type ChatReply, type ChatRouter } from "@/lib/ai-brain/chat";
 import type { Backend, Repo } from "@/lib/backend/types";
 import type { Profile } from "@/lib/types";
 
@@ -10,6 +10,8 @@ export interface ChatServiceDeps {
   backendKind: Backend["kind"];
   repoFor: (user: Profile) => Promise<Repo>;
   now?: () => Date;
+  /** Optional model-backed interpreter, shared with the rest of the Brain. Absent = deterministic routing only. */
+  router?: ChatRouter;
   log?: (e: unknown) => void;
 }
 
@@ -24,7 +26,7 @@ export async function handleChat(deps: ChatServiceDeps, message: unknown): Promi
   const mode = deps.backendKind === "demo" ? "demo" : "live";
   try {
     const repo = await deps.repoFor(deps.user);
-    const reply = await askBrain({ user: deps.user, mode, repo, now: (deps.now ?? (() => new Date()))() }, message);
+    const reply = await askBrain({ user: deps.user, mode, repo, now: (deps.now ?? (() => new Date()))(), router: deps.router }, message);
     return { ok: true, reply };
   } catch (e) {
     if (e instanceof ChatInputError) return { ok: false, error: e.message };

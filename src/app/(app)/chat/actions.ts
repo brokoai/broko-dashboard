@@ -2,6 +2,7 @@
 
 import { getRepo, requireUser } from "@/lib/auth";
 import { getBackend } from "@/lib/backend";
+import { chatRouter } from "@/lib/chat-model";
 import { handleChat, type ChatActionResult } from "@/lib/chat-service";
 
 /**
@@ -11,5 +12,5 @@ import { handleChat, type ChatActionResult } from "@/lib/chat-service";
 export async function askBroko(message: string): Promise<ChatActionResult> {
   const user = await requireUser();
   const backend = await getBackend();
-  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo }, message);
+  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo, router: chatRouter() ?? undefined }, message);
 }
