@@ -7,6 +7,13 @@ import { MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "@/lib/ai-brain/chat/prompt
 import { ChatLauncher, TurnView } from "@/components/broko-chat-view";
 import { chatReducer, initialChatState, retryText } from "@/lib/chat-state";
 
+const PROJECT_PROMPTS = [
+  "What are the key selling points?",
+  "Which units are available?",
+  "When will it be completed?",
+  "Is any information missing or outdated?",
+];
+
 /** Floating assistant. Mounted once in AppShell, so it survives navigation between dashboard pages. */
 export function BrokoChat({ demo }: { demo: boolean }) {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
@@ -18,6 +25,23 @@ export function BrokoChat({ demo }: { demo: boolean }) {
   const log = useRef<HTMLDivElement>(null);
 
   const close = useCallback(() => dispatch({ type: "close" }), []);
+
+  // "Ask Broko AI about this project" (Pre-Construction pages) opens the chat scoped to that project. Only the project id is ever
+  // sent, and the server checks on every question that this user may see that project.
+  const [scope, setScope] = useState<{ id: string; name: string } | null>(null);
+  const scopeId = useRef<string | undefined>(undefined);
+  useEffect(() => { scopeId.current = scope?.id; }, [scope]);
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent<{ projectId?: unknown; projectName?: unknown }>).detail;
+      if (typeof d?.projectId !== "string" || typeof d?.projectName !== "string") return;
+      scopeId.current = d.projectId;
+      setScope({ id: d.projectId, name: d.projectName.slice(0, 120) });
+      dispatch({ type: "open" });
+    };
+    window.addEventListener("broko:ask-project", onAsk);
+    return () => window.removeEventListener("broko:ask-project", onAsk);
+  }, []);
 
   // AI mode (paid model) is offered only when the server says it exists, and is switched on by a server-checked demo code.
   const [ai, setAi] = useState<{ available: boolean; unlocked: boolean }>({ available: false, unlocked: false });
@@ -56,7 +80,7 @@ export function BrokoChat({ demo }: { demo: boolean }) {
   const call = useCallback((text: string, asked: number) => {
     startTransition(async () => {
       try {
-        const r = await askBroko(text);
+        const r = await askBroko(text, scopeId.current);
         if (r.ok) dispatch({ type: "reply", reply: r.reply, epoch: asked });
         else dispatch({ type: "error", message: r.error, epoch: asked });
       } catch {
@@ -121,17 +145,17 @@ export function BrokoChat({ demo }: { demo: boolean }) {
               <h2 className="text-sm font-semibold text-ink">Broko AI</h2>
               <p className="truncate text-[11px] text-muted">{demo ? "Demo: synthetic sample data" : "Reads your dashboard data. Never changes it."}</p>
             </div>
-            <button type="button" onClick={() => dispatch({ type: "clear" })} disabled={state.turns.length === 0 && !state.pending} aria-label="Clear conversation" className="flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-page disabled:opacity-40 sm:h-9 sm:w-9"><Trash2 size={16} aria-hidden /></button>
+            <button type="button" onClick={() => { dispatch({ type: "clear" }); setScope(null); }} disabled={state.turns.length === 0 && !state.pending && !scope} aria-label="Clear conversation" className="flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-page disabled:opacity-40 sm:h-9 sm:w-9"><Trash2 size={16} aria-hidden /></button>
             <button type="button" onClick={close} aria-label="Close assistant" className="flex h-11 w-11 items-center justify-center rounded-md text-fg hover:bg-page sm:h-9 sm:w-9"><X size={18} aria-hidden /></button>
           </header>
 
           <div ref={log} role="log" aria-live="polite" aria-label="Conversation" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3">
             {state.turns.length === 0 && (
               <div className="text-sm text-muted">
-                <p className="text-ink">Ask about your tasks, activity and follow-ups.</p>
+                <p className="text-ink">{scope ? `Ask about ${scope.name}: its inventory, documents and dates.` : "Ask about your tasks, activity and follow-ups."}</p>
                 <p className="mt-1 text-xs">This conversation is not saved. It disappears when you close or reload the page.</p>
                 <ul className="mt-3 flex flex-wrap gap-2" aria-label="Suggested questions">
-                  {SUGGESTED_PROMPTS.map((p) => (
+                  {(scope ? PROJECT_PROMPTS : SUGGESTED_PROMPTS).map((p) => (
                     <li key={p}><button type="button" onClick={() => ask(p)} disabled={state.pending} className="min-h-11 rounded-full border border-line bg-surface px-3 py-1.5 text-left text-sm text-ink hover:bg-brand-soft disabled:opacity-50 sm:min-h-0">{p}</button></li>
                   ))}
                 </ul>
@@ -158,6 +182,12 @@ export function BrokoChat({ demo }: { demo: boolean }) {
             </div>
           )}
 
+          {scope && (
+            <div className="flex items-center gap-2 border-t border-line bg-brand-soft px-3 py-1 text-xs text-ink" data-testid="chat-scope">
+              <span className="min-w-0 flex-1 break-words">Answering about <strong>{scope.name}</strong> only.</span>
+              <button type="button" onClick={() => setScope(null)} className="min-h-11 shrink-0 rounded px-2 font-medium text-brand underline-offset-2 hover:underline sm:min-h-8">Ask about everything</button>
+            </div>
+          )}
           <form onSubmit={onSubmit} className="flex items-end gap-2 border-t border-line bg-surface p-2 sm:rounded-b-xl">
             <label htmlFor="broko-chat-input" className="sr-only">Ask Broko AI</label>
             <textarea

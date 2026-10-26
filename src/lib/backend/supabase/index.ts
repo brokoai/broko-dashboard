@@ -1,6 +1,7 @@
 import "server-only";
 import type { Backend } from "../types";
 import { PROFILE_COLUMNS, toProfile, type ProfileRow } from "./profile";
+import { createSupabasePreconRepo, createSupabaseFileStore } from "./precon";
 import { createSupabaseRepo } from "./repo";
 import { createClient } from "./server";
 
@@ -23,6 +24,7 @@ export const supabaseBackend: Backend = {
     await (await createClient()).auth.signOut();
   },
   async repoFor(user) {
-    return createSupabaseRepo(await createClient(), user.id);
+    const db = await createClient();
+    return { ...createSupabaseRepo(db, user.id), precon: createSupabasePreconRepo(db, user), preconFiles: createSupabaseFileStore(db) };
   },
 };

@@ -19,6 +19,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 export const LABELS: Record<SourceId, string> = {
   tasks: "Tasks", activity: "Activity feed", notifications: "Notifications", ai_inbox: "AI Inbox", integrations: "Integrations",
   email: "Email", teams: "Microsoft Teams", whatsapp: "WhatsApp", calendar: "Calendar", crm: "CRM", documents: "Documents",
+  preconstruction: "Pre-Construction (projects, inventory, documents)",
 };
 
 export interface Outcome {

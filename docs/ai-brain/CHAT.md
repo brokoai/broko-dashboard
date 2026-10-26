@@ -157,3 +157,10 @@ reduces wasted calls during an outage; it is not a cost cap. The model can at wo
 Not done: model-written answers (would need a grounding check against retrieved records), conversation memory, and live verification against the real
 provider (tests use a scripted fake transport only; no call to the real API has been made).
 
+
+## Pre-Construction questions
+
+`askBrain(ctx, message, { projectId? })` recognises Pre-Construction questions deterministically (`chat/precon.ts`) after the injection, action and greeting rules and **before**
+the model router, so the model never sees them and never writes any part of the answer. Exact numbers come from structured inventory queries; document passages are full-text
+retrieved, labelled unverified, and cited with title, page and a link; conflicts, stale and missing data are stated. The optional `projectId` (from "Ask Broko AI about this
+project") is validated and authorized for the signed-in user on every question. New source id: `preconstruction`. Full description: `docs/PRECONSTRUCTION_ADVISOR.md`.

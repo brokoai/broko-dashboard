@@ -15,6 +15,7 @@ const PROPOSED = {
   "0004_ai_jobs": read("supabase/proposed/0004_ai_jobs.proposed.sql"),
   "0005_default_privileges": read("supabase/proposed/0005_default_privileges.proposed.sql"),
   "0006_profiles_privacy": read("supabase/proposed/0006_profiles_privacy.proposed.sql"),
+  "0007_preconstruction": read("supabase/proposed/0007_preconstruction.proposed.sql"),
 };
 const ALL = { ...ACTIVE, ...PROPOSED };
 const entries = Object.entries(ALL);

@@ -3,7 +3,7 @@ import type { Repo } from "@/lib/backend/types";
 import type { ChatRouter } from "./model-router";
 
 /** Every place the assistant may eventually read from. Most are NOT implemented; each one reports its true state. */
-export type SourceId = "tasks" | "activity" | "notifications" | "ai_inbox" | "integrations" | "email" | "teams" | "whatsapp" | "calendar" | "crm" | "documents";
+export type SourceId = "tasks" | "activity" | "notifications" | "ai_inbox" | "integrations" | "email" | "teams" | "whatsapp" | "calendar" | "crm" | "documents" | "preconstruction";
 
 /**
  * What the assistant can say about where a piece of information came from:
@@ -28,7 +28,7 @@ export interface SourceReport {
   as_of?: string;
 }
 
-export type RecordType = "task" | "activity_event" | "notification" | "ai_inbox_summary" | "integration";
+export type RecordType = "task" | "activity_event" | "notification" | "ai_inbox_summary" | "integration" | "precon_project" | "precon_inventory" | "precon_passage";
 
 /**
  * One authorized, minimal record handed to the Brain. Built only AFTER the authorization filter; only the fields the
@@ -69,7 +69,7 @@ export interface ChatSection { kind?: "facts" | "derived" | "missing"; heading?:
 
 export type ChatIntent =
   | "attention" | "pending_tasks" | "today" | "overdue" | "upcoming" | "priority" | "owners" | "notifications" | "ai_inbox" | "integrations" | "sources" | "summary"
-  | "action_request" | "blocked" | "clarify" | "unsupported" | "help";
+  | "preconstruction" | "action_request" | "blocked" | "clarify" | "unsupported" | "help";
 
 export type ActionKind = "create_task" | "assign_task" | "update_task" | "delete_record" | "send_message" | "schedule_event" | "review_ai_message" | "change_configuration";
 

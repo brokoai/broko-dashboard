@@ -19,11 +19,11 @@ async function aiUnlocked(userId: string): Promise<boolean> {
  * server session and backend, never from the request. The browser sends one question and nothing else.
  * The model interpreter (paid) is handed over ONLY to an unlocked user; everyone else gets the deterministic chat.
  */
-export async function askBroko(message: string): Promise<ChatActionResult> {
+export async function askBroko(message: string, projectId?: string): Promise<ChatActionResult> {
   const user = await requireUser();
   const backend = await getBackend();
   const router = (await aiUnlocked(user.id)) ? chatRouter() : null;
-  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo, router: router ?? undefined }, message);
+  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo, router: router ?? undefined }, message, projectId);
 }
 
 /** What the chat should offer: whether AI mode exists at all, and whether this user has unlocked it. Reveals no configuration. */

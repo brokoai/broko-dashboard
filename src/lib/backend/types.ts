@@ -1,3 +1,4 @@
+import type { FileStore, PreconRepo } from "@/lib/precon/repo";
 import type { AiMessageView, ErrorCategory, JobStatus, ReviewDecision, ReviewResult } from "@/lib/ai-brain";
 import type {
   ActivityEvent, AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
@@ -117,6 +118,10 @@ export interface Repo {
   aiInboxCounts?: AiInboxCountsReader;
   /** Approve / reject / process / requeue. Absent on every backend not verified for writes (all of them except the demo today). */
   aiInboxWriter?: AiInboxWriter;
+  /** Pre-Construction Advisor data. Absent = not connected. In the demo it is read-only synthetic data. */
+  precon?: PreconRepo;
+  /** Private file storage for Pre-Construction documents. Absent in the demo (no files are stored there). */
+  preconFiles?: FileStore;
 }
 
 export interface Backend {

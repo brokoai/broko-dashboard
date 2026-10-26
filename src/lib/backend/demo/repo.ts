@@ -1,6 +1,8 @@
 import "server-only";
 import { isActive, isDueToday, isOverdue } from "@/lib/dates";
 import { canAssignTo } from "@/lib/permissions";
+import { demoPreconStore } from "@/lib/precon/demo-data";
+import { createMemoryPreconRepo } from "@/lib/precon/memory-repo";
 import type {
   AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
 } from "@/lib/types";
@@ -99,6 +101,8 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
   }, opts.classifier, opts.runtime);
 
   return {
+    // Synthetic, read-only, rebuilt per request: nothing a visitor does can change or persist Pre-Construction records.
+    precon: createMemoryPreconRepo({ user, store: demoPreconStore(new Date(now())), writable: false, now: () => new Date(now()) }),
     aiInbox,
     aiInboxCounts: aiInbox,
     aiInboxWriter: aiInbox,

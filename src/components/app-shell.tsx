@@ -18,6 +18,7 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/tasks", label: "My Tasks", icon: CheckSquare },
   { href: "/inbox", label: "AI Inbox", icon: Inbox },
+  { href: "/precon", label: "Pre-Construction Advisor", icon: Building2 },
   { href: "/team", label: "Team Activity", icon: Users },
   { href: "/integrations", label: "Integrations", icon: Plug },
 ];

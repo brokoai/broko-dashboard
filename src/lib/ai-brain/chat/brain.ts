@@ -1,5 +1,6 @@
 import { dayKey, isActive, isOverdueOn } from "@/lib/dates";
 import { buildApproval } from "./approval";
+import { answerPrecon, isProjectId, notConnected, parsePreconQuery, projectNotFound } from "./precon";
 import { routeIntent, type DataIntent, type PriorityFilter, type RoutedIntent } from "./intent";
 import { MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "./prompts";
 import {
@@ -30,7 +31,7 @@ function grounding(used: RetrievedRecord[], reports: SourceReport[], evidence: b
   };
 }
 
-interface Draft {
+export interface Draft {
   intent: ChatIntent;
   text: string;
   sections?: ChatSection[];
@@ -40,7 +41,7 @@ interface Draft {
   extra?: Partial<ChatReply>;
 }
 
-function finish(ctx: BrainChatContext, d: Draft): ChatReply {
+export function finish(ctx: BrainChatContext, d: Draft): ChatReply {
   const sources = d.sources ?? [];
   const sections = [...(d.sections ?? [])];
   const missing = sources.filter((s) => s.state === "unavailable");
@@ -71,12 +72,18 @@ const facts = (heading: string, rs: RetrievedRecord[]): ChatSection => ({
  *
  *   message → intent router → authorized retrieval (adapters) → policy → grounded reply
  */
-export async function askBrain(ctx: BrainChatContext, message: string): Promise<ChatReply> {
+export async function askBrain(ctx: BrainChatContext, message: string, opts: { projectId?: string } = {}): Promise<ChatReply> {
   const trimmed = typeof message === "string" ? message.trim() : "";
   if (!trimmed) throw new ChatInputError("Type a question first.");
   if (trimmed.length > MAX_MESSAGE_CHARS) throw new ChatInputError(`Please keep questions under ${MAX_MESSAGE_CHARS} characters.`);
 
   let routed = routeIntent(trimmed);
+  // Pre-Construction questions are recognised deterministically, BEFORE the model is ever consulted, and only after the
+  // tripwire / action / greeting rules above have had their say. The model never sees them and never writes the answer.
+  if (routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help") {
+    const precon = await tryPrecon(ctx, trimmed, routed, opts.projectId);
+    if (precon) return precon;
+  }
   let viaModel = false;
   // The model is consulted ONLY for a sentence the deterministic router did not understand and that names no unreadable source.
   // Blocked, action, help, clarify and every deterministic data match never reach it, so the tripwire and approval rules are
@@ -90,6 +97,32 @@ export async function askBrain(ctx: BrainChatContext, message: string): Promise<
   }
   const reply = await answer(ctx, routed);
   return viaModel ? { ...reply, routing: "model" } : reply;
+}
+
+async function tryPrecon(ctx: BrainChatContext, message: string, routed: RoutedIntent, projectId: string | undefined): Promise<ChatReply | null> {
+  const repo = ctx.repo.precon;
+  const scoped = projectId !== undefined && projectId !== "";
+  if (!repo) {
+    // Say "not connected" only when the question is plainly about Pre-Construction; otherwise carry on as before.
+    return !scoped && parsePreconQuery(message, [], { scoped: false, taskIntentMatched: routed.parts.length > 0 })?.topics.size ? notConnected(ctx) : null;
+  }
+  try {
+    let scope = null;
+    if (scoped) {
+      // Context supplied by the browser is only a hint: it is validated and authorized here, for this user, on every question.
+      scope = isProjectId(projectId) ? await repo.getProject(projectId) : null;
+      if (!scope || scope.archived_at) return projectNotFound(ctx);
+    }
+    const projects = await repo.listProjects();
+    const q = parsePreconQuery(message, projects, { scoped, taskIntentMatched: routed.parts.length > 0 });
+    return q ? await answerPrecon(ctx, q, scope, repo, message) : null;
+  } catch (e) {
+    console.error("[chat] preconstruction", e);
+    return finish(ctx, {
+      intent: "preconstruction", text: "I could not read Pre-Construction data right now, so I can't answer. Nothing was substituted.",
+      sources: [{ id: "preconstruction", label: "Pre-Construction (projects, inventory, documents)", state: "unavailable", reason: "error", detail: "Could not be read right now. Nothing was substituted." }],
+    });
+  }
 }
 
 async function answer(ctx: BrainChatContext, routed: RoutedIntent): Promise<ChatReply> {

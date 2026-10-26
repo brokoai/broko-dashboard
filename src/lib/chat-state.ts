@@ -56,7 +56,7 @@ export function chatReducer(s: ChatState, a: ChatAction): ChatState {
 
 /** Internal links only. Anything else (absolute, protocol-relative, javascript:) is dropped. */
 export function safeHref(href: string | undefined): string | undefined {
-  return href && /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(href) ? href : undefined;
+  return href && /^\/(?!\/)[A-Za-z0-9/_-]*(#p\d{1,4})?$/.test(href) ? href : undefined;
 }
 
 /** The question to re-send for a "retry" (the user turn before a trailing error), or null. */

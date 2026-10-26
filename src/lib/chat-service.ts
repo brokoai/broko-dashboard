@@ -19,14 +19,17 @@ export interface ChatServiceDeps {
  * Orchestration behind the chat server action, free of Next.js so it can be tested directly.
  * Mode is derived from the configured backend: a Supabase session is "live" and is NEVER answered from demo data.
  */
-export async function handleChat(deps: ChatServiceDeps, message: unknown): Promise<ChatActionResult> {
+export async function handleChat(deps: ChatServiceDeps, message: unknown, projectId?: unknown): Promise<ChatActionResult> {
   if (!deps.user) return { ok: false, error: "Please sign in again." };
   if (typeof message !== "string") return { ok: false, error: "Invalid request." };
   if (deps.backendKind === "unconfigured") return { ok: false, error: "The assistant is not available: no backend is configured." };
   const mode = deps.backendKind === "demo" ? "demo" : "live";
   try {
     const repo = await deps.repoFor(deps.user);
-    const reply = await askBrain({ user: deps.user, mode, repo, now: (deps.now ?? (() => new Date()))(), router: deps.router }, message);
+    const reply = await askBrain({ user: deps.user, mode, repo, now: (deps.now ?? (() => new Date()))(), router: deps.router }, message, {
+      // Optional project context from "Ask about this project". Only a string id is accepted; the Brain validates and authorizes it.
+      projectId: typeof projectId === "string" ? projectId.slice(0, 64) : undefined,
+    });
     return { ok: true, reply };
   } catch (e) {
     if (e instanceof ChatInputError) return { ok: false, error: e.message };

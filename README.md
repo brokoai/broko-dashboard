@@ -20,6 +20,8 @@ Demo mode uses synthetic data and placeholder accounts. It is passwordless, off 
 * Review of the code and of the Supabase migration: `docs/SECURITY_AND_MIGRATION_REVIEW.md`
 * `supabase/migrations/0001_init.sql` is an **unapplied, unverified reference** for a *new* Postgres database. It has known issues (e.g. the "promote first admin" SQL fails as written, see M-2) and must not be applied to an existing database. Proposed fixes are in `supabase/proposed/` (also unapplied).
 
+* Pre-Construction Advisor (projects, documents, GTA inventory, answered by Broko AI): `docs/PRECONSTRUCTION_ADVISOR.md`. Its migration `0007` is proposed and unapplied.
+
 ## Commands
 
 `npm run dev` · `npm run build` · `npm run lint` · `npm run typecheck` · `npm test` (demo-backend and permission unit tests only)
