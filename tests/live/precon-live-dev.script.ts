@@ -89,7 +89,7 @@ async function main() {
   check("member can READ an active project", seen?.id === project.id);
 
   // ---- 2. signed upload (with / without apikey), validation, extraction ----
-  const pdfBytes = makePdf(["Welcome to the LIVE-TEST tower brochure.", "Rooftop pool and 24 hour concierge. Occupancy expected in 2029."]);
+  const pdfBytes = makePdf(["Welcome to the LIVE-TEST tower brochure.", "Amenities include a rooftop pool and 24 hour concierge. Occupancy expected in 2029."]);
   const t1 = await beginUpload(A, { projectId: project.id, filename: "brochure.pdf", mime: "application/pdf", size: pdfBytes.byteLength, kind: "brochure" });
   const noKey = await putTo(t1.uploadUrl, pdfBytes, "application/pdf", false);
   let uploaded = noKey.ok;
@@ -166,7 +166,9 @@ async function main() {
   check("Brain answers a project-scoped inventory question from structured records", reply.intent === "preconstruction" && /1 inventory record/.test(reply.text), reply.text.slice(0, 80));
   check("Brain reply contains no unit number for a member", !JSON.stringify(reply).includes("L-101"));
   const cited = await askBrain({ user: member.profile, repo: brainRepo, mode: "live", now: new Date() }, "What are the selling points?", { projectId: project.id });
-  check("Brain cites the document and page", JSON.stringify(cited).includes(`/precon/documents/${t1.documentId}#p`));
+  // The retrieval terms for "selling points" are selling / amenities / features / highlights / included, so the fixture page 2 says "Amenities".
+  // Expect the exact source document AND page 2 (where the passage is), not just any document link.
+  check("Brain cites the document and page", JSON.stringify(cited).includes(`/precon/documents/${t1.documentId}#p2`), JSON.stringify(cited.text ?? "").slice(0, 100));
 
   // ---- 8. archive hides from members; removal cleans up ----
   await archiveProject(A, project.id, true);
