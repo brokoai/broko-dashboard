@@ -169,5 +169,19 @@ if (applied) {
   check("no stored file is left without a document row", orphans.rows[0].n === 0);
 }
 
+// The read-only catalog audit that is run in the Supabase SQL Editor must itself pass here (and is proven to catch a regression below).
+{
+  const { readFileSync } = await import("node:fs");
+  const audit = readFileSync(fileURLToPath(new URL("./0007_catalog_audit.proposed.sql", import.meta.url)), "utf8");
+  let msg = "";
+  try { await db.exec(audit); } catch (e) { msg = String(e.message ?? e); }
+  check("the SQL Editor catalog audit passes on a correct install", msg === "", msg);
+  await db.exec("grant select (unit_number) on public.precon_inventory to authenticated");
+  let caught = "";
+  try { await db.exec(audit); } catch (e) { caught = String(e.message ?? e); }
+  check("the catalog audit fails when unit_number is exposed", /unit_number/.test(caught), caught);
+  await db.exec("revoke select (unit_number) on public.precon_inventory from authenticated");
+}
+
 const ok = env.print("0007 pre-construction (local PostgreSQL)");
 process.exit(ok ? 0 : 1);
