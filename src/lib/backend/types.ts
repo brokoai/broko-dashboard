@@ -1,3 +1,4 @@
+import type { ChatAuditWriter } from "@/lib/ai-brain/chat/audit";
 import type { FileStore, PreconRepo } from "@/lib/precon/repo";
 import type { AiMessageView, ErrorCategory, JobStatus, ReviewDecision, ReviewResult } from "@/lib/ai-brain";
 import type {
@@ -122,6 +123,8 @@ export interface Repo {
   precon?: PreconRepo;
   /** Private file storage for Pre-Construction documents. Absent in the demo (no files are stored there). */
   preconFiles?: FileStore;
+  /** Metadata-only record of each chat question (never the text). Absent = nothing is recorded (the demo). */
+  chatAudit?: ChatAuditWriter;
 }
 
 export interface Backend {
