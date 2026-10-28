@@ -35,7 +35,17 @@ begin
       if p <> 'SELECT' and has_table_privilege('authenticated', 'public.' || t, p) then raise exception 'CHECK FAILED: authenticated has table-level % on % (columns only)', p, t; end if;
       if p = 'DELETE' and has_table_privilege('service_role', 'public.' || t, p) then raise exception 'CHECK FAILED: service_role can DELETE from %', t; end if;
     end loop;
-    if not has_table_privilege('authenticated', 'public.' || t, 'SELECT') then raise exception 'CHECK FAILED: authenticated cannot read %', t; end if;
+    -- profiles: after 0006 the table-level SELECT is replaced by a column grant that withholds email, so accept either state
+    -- (0001 alone, or 0001 + 0006) but never one where authenticated can read neither, or where 0006 left email readable.
+    if t = 'profiles' and not has_table_privilege('authenticated', 'public.profiles', 'SELECT') then
+      if not (has_column_privilege('authenticated', 'public.profiles', 'id', 'SELECT') and has_column_privilege('authenticated', 'public.profiles', 'full_name', 'SELECT')
+              and has_column_privilege('authenticated', 'public.profiles', 'role', 'SELECT')) then
+        raise exception 'CHECK FAILED: authenticated cannot read profiles (neither table-level nor the 0006 column grant)'; end if;
+      if has_column_privilege('authenticated', 'public.profiles', 'email', 'SELECT') then
+        raise exception 'CHECK FAILED: profiles is column-restricted but authenticated can still read email'; end if;
+    elsif not has_table_privilege('authenticated', 'public.' || t, 'SELECT') then
+      raise exception 'CHECK FAILED: authenticated cannot read %', t;
+    end if;
   end loop;
   if not (has_table_privilege('service_role', 'public.activity_events', 'INSERT') and has_table_privilege('service_role', 'public.integrations', 'UPDATE')
           and has_table_privilege('service_role', 'public.tasks', 'INSERT') and has_table_privilege('service_role', 'public.notifications', 'INSERT')) then
@@ -83,8 +93,9 @@ begin
     raise exception 'CHECK FAILED: a function is not owned by postgres'; end if;
 
   -- 7. Expected policy set (a missing or extra policy is a review item).
-  if (select count(*) from pg_policies where schemaname = 'public') <> 11 then
-    raise exception 'CHECK FAILED: expected 11 policies, found %', (select count(*) from pg_policies where schemaname = 'public'); end if;
+  -- Counted on the five 0001 tables only, so later migrations (0007 adds its own) do not make this check stale.
+  if (select count(*) from pg_policies where schemaname = 'public' and tablename = any (tables)) <> 11 then
+    raise exception 'CHECK FAILED: expected 11 policies on the 0001 tables, found %', (select count(*) from pg_policies where schemaname = 'public' and tablename = any (tables)); end if;
   if exists (select 1 from pg_policies where schemaname = 'public' and ('anon' = any (roles) or 'public' = any (roles))) then
     raise exception 'CHECK FAILED: a policy applies to anon/public'; end if;
   raise notice 'ALL PRIVILEGE CHECKS PASSED';

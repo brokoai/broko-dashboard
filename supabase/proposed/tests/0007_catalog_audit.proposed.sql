@@ -67,7 +67,7 @@ begin
   if (select public from storage.buckets where id = 'precon-files') then raise exception 'FAILED: bucket precon-files is PUBLIC'; end if;
   if (select file_size_limit from storage.buckets where id = 'precon-files') is null then raise exception 'FAILED: bucket has no size limit'; end if;
   if coalesce(array_length((select allowed_mime_types from storage.buckets where id = 'precon-files'), 1), 0) = 0 then raise exception 'FAILED: bucket has no MIME allow-list'; end if;
-  if exists (select 1 from storage.buckets where id = 'precon-files' and 'image/svg+xml' = any (allowed_mime_types) or 'text/html' = any (allowed_mime_types)) then
+  if exists (select 1 from storage.buckets where id = 'precon-files' and ('image/svg+xml' = any (allowed_mime_types) or 'text/html' = any (allowed_mime_types))) then
     raise exception 'FAILED: bucket allows svg or html'; end if;
   select count(*) into n from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'precon_files_%';
   if n <> 3 then raise exception 'FAILED: expected 3 precon_files_* storage policies, found %', n; end if;
