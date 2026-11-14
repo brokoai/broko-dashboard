@@ -81,12 +81,31 @@ const DOMAIN_MATCHERS: [SourceId[], RegExp][] = [
   [["email", "teams", "whatsapp"], GENERIC_MESSAGE_RE],
   [["calendar"], /\b(calendar|meetings?|appointments?)\b/],
   [["crm"], /\b(crm|leads?|customers?|clients?|deals?)\b/],
-  [["documents"], /\b(documents?|files?|contracts?|onedrive|attachments?)\b/],
+  [["documents"], /\b(documents?|files?|contracts?|onedrive|notion|attachments?)\b/],
 ];
 
 const GREETING_RE = /^\s*(hi|hello|hey|help|thanks?|thank you|what can you do|who are you)\b/i;
 const PRONOUN_RE = /\b(that|this|it|those|them|him|her|he|she|they|the same|again|more|previous|earlier|above)\b/;
 const VAGUE_RE = /^\s*(status|update|updates|anything|something|stuff|things|news|what'?s up|how is it going|any news)\W*$/i;
+
+/**
+ * A message that complains about, or asks why, the assistant's OWN earlier answer ("why u halisainated?", "that answer is wrong", "why did you say that").
+ * It asks for no data, so it must never be read as a question about a source (the word "meeting" in it is not a calendar request). Narrow on purpose:
+ * the caller also requires that no data question was recognised in the same message.
+ */
+const FEEDBACK_RE: RegExp[] = [
+  /\b(?:halluc\w*|hallis\w*|halis\w*|haluc\w*|halusin\w*|hallusin\w*)\b/,
+  /\b(?:you|u|ur|your|broko|bot|assistant)\b[^.?!]{0,60}\b(?:wrong|incorrect|mistakes?|lied|lying|made (?:it |that |things )?up|making (?:it |that |things )?up|invent(?:ed|ing)?|fabricat\w*|not true|incorrectly)\b/,
+  /\b(?:that|this|your|ur|the) (?:answer|reply|response|summary)\b[^.?!]{0,40}\b(?:wrong|incorrect|false|not right|bad)\b/,
+  /\b(?:that'?s|thats|that is|this is|it'?s|its|it is) (?:wrong|incorrect|not (?:right|true|correct)|false)\b/,
+  /\bwhy (?:did|do|are|r|were|was|would) (?:you|u) (?:say|answer|reply|give|pick|choose|show|tell|make|lie|get|think|mix|ignore)\b/,
+];
+/** A message that also asks for something ("that's wrong, show my overdue tasks") is a data question first, so it is never taken as a complaint. */
+const ASKS_FOR_DATA_RE = /\b(?:show|list|give me|tell me|get me|find|fetch|pull|what|which|who|when|where|how many|summari[sz]e|catch me up)\b/;
+export const isAnswerFeedback = (raw: string): boolean => {
+  const text = raw.trim().toLowerCase();
+  return text.length <= 300 && !ASKS_FOR_DATA_RE.test(text) && FEEDBACK_RE.some((re) => re.test(text));
+};
 
 const none = (over: Partial<RoutedIntent>): RoutedIntent => ({ intent: "unsupported", parts: [], signals: [], domains: [], ...over });
 

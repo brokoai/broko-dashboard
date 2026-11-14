@@ -1,4 +1,8 @@
-import { ChatInputError, askBrain, type ChatReply, type ChatRouter } from "@/lib/ai-brain/chat";
+import { ChatInputError, askBrain, type ChatReply, type ChatRouter, type Synthesizer } from "@/lib/ai-brain/chat";
+import { parseFocus, parseHistory } from "@/lib/ai-brain/chat/focus";
+import type { Interpreter } from "@/lib/ai-brain/chat/interpreter";
+import type { ToolAgent } from "@/lib/ai-brain/chat/tool-agent";
+import type { MeetingCache } from "@/lib/ai-brain/chat/meeting-cache";
 import { auditEntryForFailure, auditEntryForReply, type ChatAuditEntry } from "@/lib/ai-brain/chat/audit";
 import type { Backend, Repo } from "@/lib/backend/types";
 import type { Profile } from "@/lib/types";
@@ -13,6 +17,16 @@ export interface ChatServiceDeps {
   now?: () => Date;
   /** Optional model-backed interpreter, shared with the rest of the Brain. Absent = deterministic routing only. */
   router?: ChatRouter;
+  /** Optional analysis model (meetings). Absent = deterministic replies only. */
+  synthesizer?: Synthesizer;
+  /** Optional language-understanding step (see chat/interpreter.ts). Absent = the message is used as typed. */
+  interpreter?: Interpreter;
+  /** Optional Claude tool-use path (see chat/tool-agent.ts). Absent = the ordinary Brain path only. */
+  toolAgent?: ToolAgent;
+  /** The time zone dates and times in questions are read in: the asker's own, else the organisation default. */
+  timeZone?: string;
+  /** Short-lived memory of meetings just analysed, so follow-ups do not repeat the work. Absent = none. */
+  meetingCache?: MeetingCache;
   log?: (e: unknown) => void;
   /** Longest a chat reply may wait for the audit write. Defaults to 3 s. */
   auditTimeoutMs?: number;
@@ -22,7 +36,7 @@ export interface ChatServiceDeps {
  * Orchestration behind the chat server action, free of Next.js so it can be tested directly.
  * Mode is derived from the configured backend: a Supabase session is "live" and is NEVER answered from demo data.
  */
-export async function handleChat(deps: ChatServiceDeps, message: unknown, projectId?: unknown): Promise<ChatActionResult> {
+export async function handleChat(deps: ChatServiceDeps, message: unknown, projectId?: unknown, focus?: unknown, history?: unknown): Promise<ChatActionResult> {
   if (!deps.user) return { ok: false, error: "Please sign in again." };
   if (typeof message !== "string") return { ok: false, error: "Invalid request." };
   if (deps.backendKind === "unconfigured") return { ok: false, error: "The assistant is not available: no backend is configured." };
@@ -33,7 +47,9 @@ export async function handleChat(deps: ChatServiceDeps, message: unknown, projec
   let repo: Repo | undefined;
   try {
     repo = await deps.repoFor(deps.user);
-    const reply = await askBrain({ user: deps.user, mode, repo, now: clock(), router: deps.router }, message, {
+    const reply = await askBrain({ user: deps.user, mode, repo, now: clock(), router: deps.router, synthesizer: deps.synthesizer, timeZone: deps.timeZone, focus: parseFocus(focus), history: parseHistory(history), interpreter: deps.interpreter, toolAgent: deps.toolAgent, meetingCache: deps.meetingCache,
+      // Persistent organizational memory for THIS user, from their own repository (their session; RLS and the administrator-only functions apply). Absent in the demo.
+      ...(repo.orgMemory ? { orgMemory: repo.orgMemory.reader } : {}) }, message, {
       // Optional project context from "Ask about this project". Only a string id is accepted; the Brain validates and authorizes it.
       projectId: scope,
     });

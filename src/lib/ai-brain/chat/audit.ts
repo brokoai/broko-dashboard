@@ -1,4 +1,4 @@
-import type { ChatIntent, ChatReply, SourceId } from "./types";
+import { SOURCE_IDS, type ChatIntent, type ChatReply, type SourceId } from "./types";
 
 /**
  * Metadata-only audit of a chat question. By construction there is no field that can hold the message, a prompt, a model output,
@@ -16,7 +16,7 @@ export interface ChatAuditEntry {
   source_ids: SourceId[];
   record_count: number;
   has_evidence: boolean;
-  /** True only when the optional model router chose the intent. */
+  /** True when a model took part in this answer: it chose the question (routing) or wrote a validated analysis of retrieved content. */
   used_model: boolean;
   latency_ms: number;
 }
@@ -43,10 +43,10 @@ export function auditEntryForReply(reply: ChatReply, projectId: unknown, latency
     intent: reply.intent,
     outcome: outcomeOf(reply),
     project_id: projectIdOf(projectId),
-    source_ids: [...new Set(reply.grounding.sources_used)].slice(0, 12),
+    source_ids: [...new Set(reply.grounding.sources_used)].slice(0, SOURCE_IDS.length),
     record_count: clamp(reply.grounding.facts, 100000),
     has_evidence: reply.grounding.evidence === true,
-    used_model: reply.routing === "model",
+    used_model: reply.routing === "model" || reply.generation === "model_synthesised",
     latency_ms: clamp(latencyMs, 600000),
   };
 }

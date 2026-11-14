@@ -1,3 +1,4 @@
+import { unavailableConnectors } from "../src/lib/ai-brain/assistant/connectors";
 import type { BrainChatContext, ChatReply } from "../src/lib/ai-brain/chat";
 import type { Repo } from "../src/lib/backend/types";
 import type { ActivityEvent, AppNotification, Integration, Profile, Task } from "../src/lib/types";
@@ -52,6 +53,7 @@ export function fakeRepo(data: {
   return { repo, spy };
 }
 
-export const ctx = (user: Profile, repo: Repo, mode: "demo" | "live" = "live"): BrainChatContext => ({ user, repo, mode, now: NOW });
+// connectors are pinned to "none connected" so no test can ever reach a real external system through the server environment.
+export const ctx = (user: Profile, repo: Repo, mode: "demo" | "live" = "live"): BrainChatContext => ({ user, repo, mode, now: NOW, connectors: unavailableConnectors() });
 export const everything = (r: ChatReply) => JSON.stringify(r);
 export const items = (r: ChatReply) => r.sections.flatMap((s) => s.items ?? []).map((i) => i.text);

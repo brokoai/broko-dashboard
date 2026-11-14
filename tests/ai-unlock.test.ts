@@ -183,7 +183,9 @@ describe("the gate in front of paid routing", () => {
 
   it("the server action hands the router over only after re-validating the unlock cookie on that request", () => {
     const src = readFileSync("src/app/(app)/chat/actions.ts", "utf8");
-    assert.match(src, /const router = \(await aiUnlocked\(user\.id\)\) \? chatRouter\(\) : null;/);
+    assert.match(src, /const unlocked = await aiUnlocked\(user\.id\);/);
+    assert.match(src, /const router = unlocked \? chatRouter\(\) : null;/);
+    assert.match(src, /const synthesizer = unlocked \? chatSynthesizer\(\) : null;/); // the analysis model is behind the same unlock
     assert.match(src, /isUnlocked\(token, unlockKey\(process\.env\), userId\)/);
     assert.equal((src.match(/chatRouter\(\)/g) ?? []).length >= 3, true);
   });

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Bell, Building2, CheckSquare, ChevronDown, FileText, Home, Inbox, LayoutDashboard,
+  Bell, BookOpen, Building2, CheckSquare, ChevronDown, FileText, Home, Inbox, LayoutDashboard,
   LogOut, Megaphone, Menu, PieChart, Plug, Search, Settings, ShieldCheck, Users, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
@@ -19,6 +19,7 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/tasks", label: "My Tasks", icon: CheckSquare },
   { href: "/inbox", label: "AI Inbox", icon: Inbox },
   { href: "/precon", label: "Pre-Construction Advisor", icon: Building2 },
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/team", label: "Team Activity", icon: Users },
   { href: "/integrations", label: "Integrations", icon: Plug },
 ];

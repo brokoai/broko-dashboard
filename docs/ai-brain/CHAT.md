@@ -116,11 +116,17 @@ byte-identical after a broad set of questions.
 
 ## Not done / production gaps
 
-* No persistence or retention of conversations; no audit log of chat questions; no per-user rate limit.
+* No persistence of conversations (history lives only in the browser tab). *Updated 2026-11-02:* this originally also said "no audit log of
+  chat questions; no per-user rate limit". A metadata-only chat audit now exists (migration 0008, live-tested on `broko-dev` per the owner;
+  see `docs/MIGRATION_STATUS.md`), and a per-user plus global Redis limiter exists for the optional model path (`redis-limiter.ts`;
+  production keeps the model off unless a durable limiter is configured). Retention periods are drafted in `docs/RETENTION.md` and are not enforced.
 * No retrieval adapters for mail, Teams, WhatsApp, calendar, documents or CRM (each needs organisation OAuth and consent).
 * No Supabase AI Inbox repository (admins see "not connected" on the real backend). A counts-only reader exists but is unwired (`AI_INBOX_READINESS.md`).
 * No language model: a model-provider interface was deliberately **not** added (no immediate value without a provider; the
   `routeIntent` function is the single seam where a model-backed router could later plug in, behind the same schema validation).
+  *Updated 2026-11-02: outdated.* An optional model **interpreter** now exists (`chat/model-router.ts`, `src/lib/chat-model.ts`): it only
+  chooses one of the fixed read-only questions, is off unless `BROKO_AI_CHAT=llm` and a key is set, is gated by a demo code on production
+  domains, and is disabled in production without a durable limiter. It never answers, reads data or acts.
 * Isolation tested against demo rules and fake repositories, not a real Supabase project with real RLS.
 * `AppNotification` has no owner field: notification scoping rests on the repository.
 * The injection scanner is a tripwire, not a boundary: the structural protections are that chat has no tools, no write path and

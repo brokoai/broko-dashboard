@@ -20,6 +20,7 @@ export const LABELS: Record<SourceId, string> = {
   tasks: "Tasks", activity: "Activity feed", notifications: "Notifications", ai_inbox: "AI Inbox", integrations: "Integrations",
   email: "Email", teams: "Microsoft Teams", whatsapp: "WhatsApp", calendar: "Calendar", crm: "CRM", documents: "Documents",
   preconstruction: "Pre-Construction (projects, inventory, documents)",
+  knowledge: "Organizational knowledge (approved)",
 };
 
 export interface Outcome {
@@ -66,22 +67,22 @@ export function clean(s: string, max: number): string {
   const flat = s.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
-const safeRef = (id: string | null | undefined) => (id && SAFE_ID.test(id) ? id : null);
+export const safeRef = (id: string | null | undefined) => (id && SAFE_ID.test(id) ? id : null);
 const taskHref = (id: string | null) => (id ? `/tasks/${id}` : undefined);
-const provenanceOf = (ctx: BrainChatContext): "live" | "demo" => (ctx.mode === "demo" ? "demo" : "live");
-const newest = (stamps: (string | null)[]): string | undefined => {
+export const provenanceOf = (ctx: BrainChatContext): "live" | "demo" => (ctx.mode === "demo" ? "demo" : "live");
+export const newest = (stamps: (string | null)[]): string | undefined => {
   const ms = stamps.filter((s): s is string => !!s).map((s) => new Date(s).getTime()).filter((n) => Number.isFinite(n));
   return ms.length ? new Date(Math.max(...ms)).toISOString() : undefined;
 };
 
-const readable = (ctx: BrainChatContext, id: SourceId, detail: string, records: RetrievedRecord[]): SourceReport => ({
+export const readable = (ctx: BrainChatContext, id: SourceId, detail: string, records: RetrievedRecord[]): SourceReport => ({
   id, label: LABELS[id], state: provenanceOf(ctx), detail, count: records.length, as_of: newest(records.map((r) => r.timestamp)),
 });
-const failed = (id: SourceId): Outcome => ({
+export const failed = (id: SourceId): Outcome => ({
   ok: false, records: [],
   report: { id, label: LABELS[id], state: "unavailable", reason: "error", detail: "Could not be read right now. Nothing was substituted." },
 });
-const refused = (id: SourceId, reason: "admin_only" | "not_connected", detail: string): Outcome => ({
+export const refused = (id: SourceId, reason: "admin_only" | "not_connected", detail: string): Outcome => ({
   ok: false, records: [], report: { id, label: LABELS[id], state: "unavailable", reason, detail },
 });
 
@@ -217,14 +218,19 @@ export type ReadableSource = keyof typeof ADAPTERS;
 export const isReadable = (id: SourceId): id is ReadableSource => id in ADAPTERS;
 
 /** Runs the requested adapters (and what they need) in dependency order; independent ones run in parallel. */
-export async function retrieve(ctx: BrainChatContext, ids: ReadableSource[]): Promise<Outcomes> {
+export type AdapterExec = (id: ReadableSource, got: Outcomes) => Promise<Outcome>;
+/**
+ * `exec` decides HOW one adapter is run (default: call it directly). The Assistant passes an executor that runs each adapter through the
+ * tool registry, so dependency order, parallelism and the shared `got` map stay defined in this one place.
+ */
+export async function retrieve(ctx: BrainChatContext, ids: ReadableSource[], exec: AdapterExec = (id, got) => ADAPTERS[id].retrieve(ctx, got)): Promise<Outcomes> {
   const wanted = new Set<ReadableSource>(ids);
   for (const id of ids) for (const dep of ADAPTERS[id].needs ?? []) if (isReadable(dep)) wanted.add(dep);
   const got: Outcomes = {};
   const first = [...wanted].filter((id) => !(ADAPTERS[id].needs?.length));
-  await Promise.all(first.map(async (id) => { got[id] = await ADAPTERS[id].retrieve(ctx, got); }));
+  await Promise.all(first.map(async (id) => { got[id] = await exec(id, got); }));
   const second = [...wanted].filter((id) => ADAPTERS[id].needs?.length);
-  await Promise.all(second.map(async (id) => { got[id] = await ADAPTERS[id].retrieve(ctx, got); }));
+  await Promise.all(second.map(async (id) => { got[id] = await exec(id, got); }));
   return got;
 }
 

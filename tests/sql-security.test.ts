@@ -16,6 +16,10 @@ const PROPOSED = {
   "0005_default_privileges": read("supabase/proposed/0005_default_privileges.proposed.sql"),
   "0006_profiles_privacy": read("supabase/proposed/0006_profiles_privacy.proposed.sql"),
   "0007_preconstruction": read("supabase/proposed/0007_preconstruction.proposed.sql"),
+  "0009_knowledge": read("supabase/proposed/0009_knowledge.proposed.sql"),
+  "0010_chat_audit_vocab": read("supabase/proposed/0010_chat_audit_vocab.proposed.sql"),
+  "0011_knowledge_guards": read("supabase/proposed/0011_knowledge_guards.proposed.sql"),
+  "0012_knowledge_secret_check": read("supabase/proposed/0012_knowledge_secret_check.proposed.sql"),
 };
 const ALL = { ...ACTIVE, ...PROPOSED };
 const entries = Object.entries(ALL);

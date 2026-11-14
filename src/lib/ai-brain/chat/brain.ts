@@ -1,21 +1,37 @@
 import { dayKey, isActive, isOverdueOn } from "@/lib/dates";
 import { buildApproval } from "./approval";
+import { tryKnowledge, withProjectKnowledge } from "./knowledge";
+import { tryMeeting } from "./meetings";
+import { tryNotion } from "./notion";
 import { answerPrecon, isProjectId, notConnected, parsePreconQuery, projectNotFound } from "./precon";
-import { routeIntent, type DataIntent, type PriorityFilter, type RoutedIntent } from "./intent";
-import { MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "./prompts";
+import { isAnswerFeedback, routeIntent, type DataIntent, type PriorityFilter, type RoutedIntent } from "./intent";
+import { retrieveViaTools, runBrainTool, standardRegistry } from "../assistant/brain-tools";
+import type { AgentOutcome } from "./tool-agent";
+import { prepareProposal, type ProposalType } from "../assistant/proposals";
+import { FOLLOW_UPS, MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "./prompts";
+import { isCanonical, type InterpretContext } from "./interpreter";
 import {
-  ADAPTERS, LABELS, MESSAGE_SOURCES, recordText, retrieve, unreadableSources, type Outcomes, type ReadableSource,
+  ADAPTERS, LABELS, MESSAGE_SOURCES, recordText, unreadableSources, type Outcomes, type ReadableSource,
 } from "./retrieval";
-import type { BrainChatContext, ChatIntent, ChatItem, ChatReply, ChatSection, Grounding, RetrievedRecord, SourceId, SourceReport } from "./types";
+import type { ActionProposal } from "../assistant/proposals";
+import type { ActionKind, BrainChatContext, ChatIntent, ChatItem, ChatReply, ChatSection, Grounding, RetrievedRecord, SourceId, SourceReport } from "./types";
 
 export class ChatInputError extends Error {}
 export { SUGGESTED_PROMPTS };
 
 const DEMO_NOTICE = "Demo mode: every answer here comes from synthetic sample data, not operational data.";
+const MIXED_NOTICE = "Part of this answer is demo data. The Notion part is live.";
 const MAX_ITEMS = 5;
 const UPCOMING_DAYS = 7;
 const CAPABILITIES =
   "I answer a fixed set of read-only questions about tasks (pending, overdue, upcoming, by priority, by owner), the activity feed, notifications, AI Inbox status and integration status, and I can combine them. I am not a general-purpose AI, I never change anything, and I only report what I actually read.";
+
+/** Fixed wording, no record text: a suggestion, kept visibly apart from the recorded facts above it. */
+const RECOMMEND: ChatSection = { kind: "recommendation", heading: "Suggested next step (my suggestion, not recorded data)", text: "Start with the oldest overdue item, then the high-priority ones. Check the due dates yourself before acting." };
+
+/** The reply to a complaint about an earlier answer. Fixed wording: it reads no data, claims nothing about what went wrong, and never says it was or was not right. */
+const FEEDBACK_REPLY =
+  "I'm sorry that answer didn't help. I can only answer from the data and meeting notes I can read, and I can get a question wrong, for example by picking the wrong meeting when more than one fits the date, or by misreading a typo. From this message alone I can't tell what went wrong. Tell me which question you asked and which meeting you meant, and I'll check it again. Open the source under an answer to see the notes it came from.";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const labelsOf = (ids: SourceId[]) => ids.map((i) => LABELS[i]).join(", ");
@@ -44,12 +60,20 @@ export interface Draft {
 export function finish(ctx: BrainChatContext, d: Draft): ChatReply {
   const sources = d.sources ?? [];
   const sections = [...(d.sections ?? [])];
-  const missing = sources.filter((s) => s.state === "unavailable");
+  const retrievedAt = ctx.now.toISOString();
+  const stamped = sources.map((s) => ({ ...s, retrieved_at: retrievedAt }));
+  const missing = stamped.filter((s) => s.state === "unavailable");
   if (missing.length && d.intent !== "sources") sections.push({ kind: "missing", heading: "Not checked", text: missing.map((s) => `${s.label}: ${s.detail}`).join(" ") });
+  // The data behind THIS answer, which is not always the data behind the app: a demo workspace can still read a real Notion, and that
+  // answer must never be labelled demo. A live session is always live.
+  const live = stamped.some((s) => s.state === "live" && s.id === "documents");
+  const demo = stamped.some((s) => s.state === "demo");
+  const data: "demo" | "live" | "mixed" = ctx.mode === "live" ? "live" : live && !demo ? "live" : live && demo ? "mixed" : "demo";
   return {
-    intent: d.intent, mode: ctx.mode, text: d.text, sections, sources,
+    intent: d.intent, mode: ctx.mode, data, text: d.text, sections, sources: stamped,
+    ...(FOLLOW_UPS[d.intent] ? { follow_ups: [...FOLLOW_UPS[d.intent]!] } : {}),
     grounding: grounding(d.used ?? [], sources, d.evidence ?? false),
-    ...(ctx.mode === "demo" ? { notice: DEMO_NOTICE } : {}),
+    ...(data === "demo" && ctx.mode === "demo" ? { notice: DEMO_NOTICE } : data === "mixed" ? { notice: MIXED_NOTICE } : {}),
     ...d.extra,
     generated_at: ctx.now.toISOString(),
   };
@@ -78,25 +102,105 @@ export async function askBrain(ctx: BrainChatContext, message: string, opts: { p
   if (trimmed.length > MAX_MESSAGE_CHARS) throw new ChatInputError(`Please keep questions under ${MAX_MESSAGE_CHARS} characters.`);
 
   let routed = routeIntent(trimmed);
+  // A complaint about an earlier answer asks for no data: it is answered here, before any model or source, so the word "meeting" in it can never be read as a calendar question.
+  if (routed.intent !== "blocked" && routed.intent !== "action_request" && isAnswerFeedback(trimmed)) return finish(ctx, { intent: "help", text: FEEDBACK_REPLY });
+  // What the Brain reads. Normally the message as typed; with a language-understanding step it is what the user MEANT (typos, Hinglish, follow-ups).
+  // A message the deterministic rules already block or recognise as a change request is never sent to the model.
+  let q = trimmed;
+  let interpreted = false;
+  // Claude tool use (flag BROKO_AI_TOOLS; ctx.toolAgent is absent otherwise). Only for a sentence the rules did not recognise, outside a meeting
+  // follow-up and a project scope. It reads ONLY through runTool() and replaces the language step when it answers. When it declines for ANY reason
+  // the ordinary path below runs exactly as it does without the flag, so a denied request can never be answered here but refused there (or the reverse).
+  if (ctx.toolAgent && routed.intent === "unsupported" && !ctx.focus && !opts.projectId && !isCanonical(trimmed)) {
+    const outcome = await ctx.toolAgent.run({
+      userId: ctx.user.id, role: ctx.user.role === "admin" ? "admin" : "member", message: trimmed, today: interpretContext(ctx).today, nowMs: ctx.now.getTime(), timeZone: ctx.timeZone || "UTC", recent: ctx.history ?? [],
+      contracts: (ctx.tools ?? standardRegistry()).list(), run: (id, input) => runBrainTool(ctx, id, input),
+    });
+    if (outcome.kind === "answered") return toolAnswer(ctx, outcome);
+  }
+  if (ctx.interpreter && routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help" && !isCanonical(trimmed)) {
+    const meant = await ctx.interpreter.interpret(ctx.user.id, trimmed, interpretContext(ctx));
+    if (meant?.kind === "ambiguous") {
+      return finish(ctx, { intent: "clarify", text: meant.question, extra: { clarification: { question: meant.question, options: meant.options }, follow_ups: [], routing: "model", generation: "model_routed" } });
+    }
+    if (meant?.kind === "restated" && meant.question !== trimmed) {
+      const again = routeIntent(meant.question);
+      // A meaning that trips the injection tripwire is discarded. One that is a change request ("delet yesterdys meeting") is kept: it only ever
+      // produces the existing "approval required, not executed" card, so a badly typed request is handled like a well typed one.
+      if (again.intent !== "blocked") { q = meant.question; routed = again; interpreted = true; }
+    }
+  }
+  // When the conversation is already about a meeting, a short follow-up ("who owns that?", "the previous meeting") belongs to it. It is checked first,
+  // because the questions below would otherwise take wording like "what was decided" for something else. It is skipped for anything that is
+  // not plainly about meetings (tasks, notifications, ...), and the blocked, action and help rules above still come first.
+  if (ctx.focus && routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help") {
+    const follow = await tryMeeting(ctx, q, routed);
+    if (follow) return follow;
+  }
   // Pre-Construction questions are recognised deterministically, BEFORE the model is ever consulted, and only after the
   // tripwire / action / greeting rules above have had their say. The model never sees them and never writes the answer.
   if (routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help") {
-    const precon = await tryPrecon(ctx, trimmed, routed, opts.projectId);
+    const precon = await tryPrecon(ctx, q, routed, opts.projectId);
     if (precon) return precon;
+  }
+  // Approved organizational knowledge is next: explicit "what did we decide / what is our procedure" questions, and questions that are
+  // otherwise unsupported but really match approved knowledge. It never runs for blocked, action, help or clarify, and when knowledge
+  // is absent or unavailable everything below behaves exactly as it did before.
+  if (routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help" && routed.intent !== "clarify") {
+    const knowledge = await tryKnowledge(ctx, q, routed, opts.projectId);
+    if (knowledge) return knowledge;
+  }
+  // Questions about what happened in a meeting (summary, decisions, action items) are located, read and analysed through the registry.
+  // Never for blocked, action, help or clarify; when the source is not connected they say so honestly.
+  if (routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help" && routed.intent !== "clarify") {
+    const meeting = await tryMeeting(ctx, q, routed);
+    if (meeting) return meeting;
+  }
+  // Questions that name Notion are answered from Notion through the registry when it is connected (otherwise this returns null and the
+  // existing "cannot read it yet" reply below is unchanged). Never for blocked, action, help or clarify.
+  if (routed.intent !== "blocked" && routed.intent !== "action_request" && routed.intent !== "help" && routed.intent !== "clarify") {
+    const notion = await tryNotion(ctx, q, routed);
+    if (notion) return notion;
   }
   let viaModel = false;
   // The model is consulted ONLY for a sentence the deterministic router did not understand and that names no unreadable source.
   // Blocked, action, help, clarify and every deterministic data match never reach it, so the tripwire and approval rules are
   // unchanged. The model can only choose a read-only question; retrieval, authorization and wording below stay deterministic.
   if (ctx.router && routed.intent === "unsupported" && routed.domains.length === 0) {
-    const m = await ctx.router.route(ctx.user.id, trimmed);
+    const m = await ctx.router.route(ctx.user.id, q);
     if (m) {
       routed = { intent: m.intent, parts: m.parts, signals: [], domains: [], priority: m.priority, action: m.action };
       viaModel = true;
     }
   }
-  const reply = await answer(ctx, routed);
-  return viaModel ? { ...reply, routing: "model" } : reply;
+  const reply = await answer(ctx, routed, q);
+  return viaModel || interpreted ? { ...reply, routing: "model", ...(reply.generation === "model_synthesised" ? {} : { generation: "model_routed" as const }) } : reply;
+}
+
+/** The reply for a tool-use answer: Claude wrote the text from meeting segments it was shown, and the sources are only those it validly cited. */
+function toolAnswer(ctx: BrainChatContext, out: Extract<AgentOutcome, { kind: "answered" }>): ChatReply {
+  const used: RetrievedRecord[] = out.sources.map((s) => ({ source: "documents", type: "external_page", ref: s.record_id, label: s.title, timestamp: null, scope: "organization", provenance: "live", flagged: false, attrs: {} }));
+  const items: ChatItem[] = out.sources.map((s) => ({ text: `${s.title}${s.when ? ` — ${s.when}` : ""}`, source: "documents", cite: s.cites, ...(s.url ? { external_url: s.url } : {}) }));
+  const fromMemory = out.sources.length > 0 && out.sources.every((s) => s.memory);
+  return finish(ctx, {
+    intent: "knowledge", text: out.text,
+    sections: [{ kind: "facts", heading: fromMemory ? "From stored Notion memory (proposed unless marked reviewed)" : "From the meeting notes", items }],
+    sources: [{ id: "documents", label: "Notion (pages shared with Broko)", state: "live", detail: "Read just now through Broko's tool registry.", count: out.sources.length }],
+    used, evidence: true,
+    // No `generation` here on purpose: "model_synthesised" tells the user every statement was validated against the page, which only the meeting analysis does.
+    extra: { follow_ups: [], quiet: true, notice: "An AI model wrote this answer from the meeting notes it read through Broko's tools. Statements cite passages of the source. Open the source to review the supporting context." },
+  });
+}
+
+/** What the language step is told about the conversation. Today's date is computed here, in the user's time zone, never by the model. */
+function interpretContext(ctx: BrainChatContext): InterpretContext {
+  const timeZone = ctx.timeZone || "UTC";
+  let today: string;
+  try { today = new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(ctx.now); } catch { today = ctx.now.toISOString().slice(0, 10); }
+  return {
+    today, timeZone, recent: ctx.history ?? [],
+    ...(ctx.focus ? { meeting: { title: ctx.focus.title, ...(ctx.focus.starts_at ? { date: ctx.focus.starts_at.slice(0, 10) } : {}), last_answer: ctx.focus.output.replace("_", " ") } } : {}),
+  };
 }
 
 async function tryPrecon(ctx: BrainChatContext, message: string, routed: RoutedIntent, projectId: string | undefined): Promise<ChatReply | null> {
@@ -115,7 +219,9 @@ async function tryPrecon(ctx: BrainChatContext, message: string, routed: RoutedI
     }
     const projects = await repo.listProjects();
     const q = parsePreconQuery(message, projects, { scoped, taskIntentMatched: routed.parts.length > 0 });
-    return q ? await answerPrecon(ctx, q, scope, repo, message) : null;
+    const reply = q ? await answerPrecon(ctx, q, scope, repo, message) : null;
+    // A project-scoped question also gets that project's approved notes (added after the Pre-Construction answer, never changing it).
+    return reply && scope ? await withProjectKnowledge(ctx, reply, scope) : reply;
   } catch (e) {
     console.error("[chat] preconstruction", e);
     return finish(ctx, {
@@ -125,7 +231,7 @@ async function tryPrecon(ctx: BrainChatContext, message: string, routed: RoutedI
   }
 }
 
-async function answer(ctx: BrainChatContext, routed: RoutedIntent): Promise<ChatReply> {
+async function answer(ctx: BrainChatContext, routed: RoutedIntent, message: string): Promise<ChatReply> {
   switch (routed.intent) {
     case "blocked":
       return finish(ctx, { intent: "blocked", text: "I can't help with that request. It looks like an attempt to change my instructions or reach secrets or system details, and I don't share those. Ask me about your tasks, activity or sources instead." });
@@ -135,7 +241,7 @@ async function answer(ctx: BrainChatContext, routed: RoutedIntent): Promise<Chat
       return finish(ctx, {
         intent: "action_request",
         text: `I can't make changes or send anything from chat, and nothing was done. "${approval.label}" needs a person's approval on the normal screen, where the usual permission checks and audit trail apply.${who}`,
-        extra: { approval },
+        extra: { approval, ...proposalFor(ctx, routed.action ?? "update_task", message) },
       });
     }
     case "help":
@@ -149,6 +255,16 @@ async function answer(ctx: BrainChatContext, routed: RoutedIntent): Promise<Chat
   }
 }
 
+const PROPOSAL_FOR_ACTION: Record<ActionKind, ProposalType> = {
+  create_task: "create_task", assign_task: "assign_task", update_task: "update_task", delete_record: "delete_record", send_message: "send_email",
+  schedule_event: "create_calendar_event", review_ai_message: "review_ai_message", change_configuration: "change_configuration",
+};
+/** A prepared, display-only proposal for the requested change. Not stored, not executable, never run from chat. */
+function proposalFor(ctx: BrainChatContext, action: ActionKind, message: string): { proposal?: ActionProposal } {
+  const made = prepareProposal(ctx.user, PROPOSAL_FOR_ACTION[action], { request_text: message.slice(0, 200) }, ctx.now);
+  return made.ok ? { proposal: made.proposal } : {};
+}
+
 // ---- unsupported ------------------------------------------------------------------------------------------------
 
 async function answerUnsupported(ctx: BrainChatContext, routed: RoutedIntent): Promise<ChatReply> {
@@ -159,7 +275,7 @@ async function answerUnsupported(ctx: BrainChatContext, routed: RoutedIntent): P
       sections: [{ kind: "facts", heading: "Try asking", items: SUGGESTED_PROMPTS.map((text) => ({ text })) }],
     });
   }
-  const got = await retrieve(ctx, ["integrations"]);
+  const got = await retrieveViaTools(ctx, ["integrations"]);
   const reports = unreadableSources(routed.domains, got.integrations?.ok ? got.integrations.records : null);
   return finish(ctx, {
     intent: "unsupported",
@@ -213,7 +329,7 @@ async function answerData(ctx: BrainChatContext, routed: RoutedIntent): Promise<
   const unreadable = [...new Set([...parts.flatMap((p) => ALSO_RELEVANT[p] ?? []), ...routed.domains])];
   const need = new Set<ReadableSource>(parts.flatMap((p) => NEEDS[p]));
   if (unreadable.length) need.add("integrations"); // only to state WHY a source is unavailable
-  const o = await retrieve(ctx, [...need]);
+  const o = await retrieveViaTools(ctx, [...need]);
 
   const results = parts.map((p) => answerPart(ctx, p, o, routed));
   const shownIds = new Set<SourceId>(parts.flatMap((p) => NEEDS[p]));
@@ -252,7 +368,7 @@ function answerPart(ctx: BrainChatContext, p: DataIntent, o: Outcomes, routed: R
       const caveat = "Follow-ups that exist only in email, Teams or WhatsApp are not visible to me yet.";
       return {
         lines: [tp.overdue.length ? `${plural(tp.overdue.length, "task")} overdue, oldest first. ${caveat}` : `Nothing is overdue in your tasks. ${caveat}`],
-        sections: tp.overdue.length ? [facts("Overdue", tp.overdue)] : [], used: tp.overdue, ok: true,
+        sections: tp.overdue.length ? [facts("Overdue", tp.overdue), RECOMMEND] : [], used: tp.overdue, ok: true,
       };
     }
     case "upcoming": {
@@ -358,6 +474,7 @@ function answerPart(ctx: BrainChatContext, p: DataIntent, o: Outcomes, routed: R
         const pending = a.records[0].attrs.review_pending ?? 0;
         if (pending) { parts.push(`${plural(pending, "AI Inbox message")} awaiting your review${a.report.state === "demo" ? " (sample emails)" : ""}`); used.push(...a.records); }
       }
+      if (sections.some((x) => x.heading?.startsWith("Overdue") || x.heading?.startsWith("High priority"))) sections.push(RECOMMEND);
       lines.push(parts.length ? `Needs attention: ${parts.join(", ")}.` : ok ? "Nothing in your tasks, notifications or AI Inbox needs attention right now." : "I could not read your tasks right now.");
       return { lines, sections, used, ok };
     }

@@ -2,6 +2,8 @@ import "server-only";
 import type { Backend } from "../types";
 import { PROFILE_COLUMNS, toProfile, type ProfileRow } from "./profile";
 import { createSupabaseChatAudit } from "./chat-audit";
+import { createSupabaseKnowledgeRepo } from "./knowledge";
+import { createSupabaseOrgMemory } from "./org-memory";
 import { createSupabasePreconRepo, createSupabaseFileStore } from "./precon";
 import { createSupabaseRepo } from "./repo";
 import { createClient } from "./server";
@@ -26,6 +28,6 @@ export const supabaseBackend: Backend = {
   },
   async repoFor(user) {
     const db = await createClient();
-    return { ...createSupabaseRepo(db, user.id), precon: createSupabasePreconRepo(db, user), preconFiles: createSupabaseFileStore(db), chatAudit: createSupabaseChatAudit(db, user.id) };
+    return { ...createSupabaseRepo(db, user.id), precon: createSupabasePreconRepo(db, user), preconFiles: createSupabaseFileStore(db), chatAudit: createSupabaseChatAudit(db, user.id), knowledge: createSupabaseKnowledgeRepo(db, user), orgMemory: createSupabaseOrgMemory(db, user) };
   },
 };

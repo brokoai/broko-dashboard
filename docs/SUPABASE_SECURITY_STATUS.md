@@ -4,6 +4,15 @@ Read this before any real business data is allowed near the database. It is deli
 **enforced** only when both the database and the application do what is claimed, and a database claim counts only once it has
 been applied and verified on a real project. As of this writing **nothing has been applied to any remote database.**
 
+> **Update 2026-11-02 (Phase 1 reconciliation): the sentence above and the "Status today" column are historical (written 2026-10-25).**
+> By a read-only check of the development project `broko-dev` on 2026-10-31, migrations 0001, 0002, 0006, 0007, 0008, 0009 and 0010 have
+> migration-history rows there; 0003, 0004, 0005 and 0011 do not. For 0001, 0002, 0006 and 0007 the stored SQL was never compared with the
+> files, so "applied" means a history row, not a proven control. The current, evidence-labelled position is in
+> `docs/MIGRATION_STATUS.md`; use that page, not the table below, to decide what is in place. Corrections to the table:
+> H-1 (task reassignment) is created by **0002** (`tasks_guard`), not 0003; L-6 and M-2 live in **0001**; M-5 is still open (restricting
+> `team_workload()` to administrators is an unresolved proposal, `docs/ADR_BRAIN_V1_DECISIONS.md` D4; nothing is written or applied);
+> M-6 (public sign-ups) is still not verified on any project. Production was not touched by any of this.
+
 Evidence labels:
 - **Verified locally** = executed on a local PostgreSQL that imitates Supabase's roles and defaults (see the limits in
   `docs/SUPABASE_CLI_ROLE_MODEL.md`). It does not prove behaviour on a real Supabase project.

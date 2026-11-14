@@ -3,6 +3,8 @@ import { isActive, isDueToday, isOverdue } from "@/lib/dates";
 import { canAssignTo } from "@/lib/permissions";
 import { demoPreconStore } from "@/lib/precon/demo-data";
 import { createMemoryPreconRepo } from "@/lib/precon/memory-repo";
+import { demoKnowledgeStore } from "@/lib/knowledge/demo-data";
+import { createMemoryKnowledgeRepo } from "@/lib/knowledge/memory-repo";
 import type {
   AppNotification, Integration, Person, Profile, Task, TaskCounts, TaskInput, TeamMember,
 } from "@/lib/types";
@@ -100,9 +102,15 @@ export function createDemoRepo(user: Profile, store: StateStore, now: () => numb
     },
   }, opts.classifier, opts.runtime);
 
+  const demoPrecon = createMemoryPreconRepo({ user, store: demoPreconStore(new Date(now())), writable: false, now: () => new Date(now()) });
   return {
     // Synthetic, read-only, rebuilt per request: nothing a visitor does can change or persist Pre-Construction records.
-    precon: createMemoryPreconRepo({ user, store: demoPreconStore(new Date(now())), writable: false, now: () => new Date(now()) }),
+    precon: demoPrecon,
+    // Synthetic, read-only, rebuilt per request: a visitor can neither submit nor review knowledge, so nothing is ever saved here.
+    knowledge: createMemoryKnowledgeRepo({
+      user, store: demoKnowledgeStore(new Date(now())), writable: false, now: () => new Date(now()),
+      projectIds: async () => new Set((await demoPrecon.listProjects()).map((p) => p.id)),
+    }),
     aiInbox,
     aiInboxCounts: aiInbox,
     aiInboxWriter: aiInbox,

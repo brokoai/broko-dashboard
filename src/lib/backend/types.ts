@@ -1,4 +1,6 @@
 import type { ChatAuditWriter } from "@/lib/ai-brain/chat/audit";
+import type { KnowledgeRepo } from "@/lib/knowledge/repo";
+import type { OrgMemoryAccess } from "@/lib/ai-brain/org-memory/types";
 import type { FileStore, PreconRepo } from "@/lib/precon/repo";
 import type { AiMessageView, ErrorCategory, JobStatus, ReviewDecision, ReviewResult } from "@/lib/ai-brain";
 import type {
@@ -125,6 +127,10 @@ export interface Repo {
   preconFiles?: FileStore;
   /** Metadata-only record of each chat question (never the text). Absent = nothing is recorded (the demo). */
   chatAudit?: ChatAuditWriter;
+  /** Governed organizational knowledge (approved, current items are what the Brain may cite). Absent = not connected. In the demo it is read-only synthetic data. */
+  knowledge?: KnowledgeRepo;
+  /** Persistent organizational memory for THIS user (administrators only; every part refuses anyone else). Absent = not connected. The demo never has it. */
+  orgMemory?: OrgMemoryAccess;
 }
 
 export interface Backend {

@@ -7,3 +7,4 @@ export { createRedisRateLimiter, redisLimiterFromEnv, type RedisLimiterOptions }
 export { ADAPTERS, retrieve } from "./retrieval";
 export { visibleActivity, visibleTasks } from "./retrieval";
 export type { ActionKind, ApprovalRequest, Grounding, RecordType, RetrievedRecord, BrainChatContext, ChatIntent, ChatItem, ChatReply, ChatSection, ChatTurn, Provenance, SourceId, SourceReport, UnavailableReason } from "./types";
+export { createSynthesizer, type Synthesizer, type SynthesisResult } from "./synthesizer";

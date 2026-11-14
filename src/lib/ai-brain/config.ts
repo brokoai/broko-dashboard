@@ -6,6 +6,8 @@ export interface AiBrainConfig {
   classifier: "rules" | "llm";
   /** Requested chat routing. "llm" still needs ANTHROPIC_API_KEY; otherwise chat uses deterministic routing. Default: rules. */
   chat: "rules" | "llm";
+  /** Claude tool use through the Tool Registry (BROKO_AI_TOOLS=1). Default off; it also needs chat "llm" and a key. */
+  tools: boolean;
   llm: { configured: boolean; model: string };
   policy: ProcessingPolicy;
   ownerRules: OwnerRule[];
@@ -62,7 +64,8 @@ export function loadAiBrainConfig(env: Record<string, string | undefined>): AiBr
   const chatRequested = env.BROKO_AI_CHAT?.trim().toLowerCase();
   if (chatRequested && chatRequested !== "rules" && chatRequested !== "llm") problems.push("BROKO_AI_CHAT is invalid; chat uses deterministic routing");
   const chat: AiBrainConfig["chat"] = chatRequested === "llm" ? "llm" : "rules";
-  const cfg: AiBrainConfig = { classifier, chat, llm: { configured: Boolean(apiKey), model: env.BROKO_AI_MODEL?.trim() || DEFAULT_MODEL }, policy, ownerRules, problems };
+  const tools = env.BROKO_AI_TOOLS?.trim() === "1";
+  const cfg: AiBrainConfig = { classifier, chat, tools, llm: { configured: Boolean(apiKey), model: env.BROKO_AI_MODEL?.trim() || DEFAULT_MODEL }, policy, ownerRules, problems };
   Object.defineProperty(cfg, "apiKey", { value: apiKey, enumerable: false });
   return cfg;
 }

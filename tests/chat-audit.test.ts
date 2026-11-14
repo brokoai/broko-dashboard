@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SUGGESTED_PROMPTS } from "../src/lib/ai-brain/chat";
 import type { ChatReply } from "../src/lib/ai-brain/chat";
+import { CHAT_INTENTS, SOURCE_IDS } from "../src/lib/ai-brain/chat/types";
 import { auditEntryForFailure, auditEntryForReply, type ChatAuditEntry, type ChatAuditWriter } from "../src/lib/ai-brain/chat/audit";
 import { createDemoRepo, DEMO_USERS, memoryStore } from "../src/lib/backend/demo/repo";
 import { createSupabaseChatAudit } from "../src/lib/backend/supabase/chat-audit";
@@ -154,19 +155,33 @@ describe("chat audit: failure and absence never affect the answer", () => {
 });
 
 describe("chat audit: the SQL vocabulary cannot drift from the code", () => {
-  const types = readFileSync(new URL("../src/lib/ai-brain/chat/types.ts", import.meta.url), "utf8");
-  const names = (re: RegExp) => [...(re.exec(types)?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+  // 0008 is applied as reviewed and never edited; 0010 widens the lists. The code (runtime arrays) must equal the LATEST list, and
+  // every value 0008 allowed must still be allowed (additive only).
+  const SQL10 = readFileSync(new URL("../supabase/proposed/0010_chat_audit_vocab.proposed.sql", import.meta.url), "utf8");
+  const list = (sql: string, re: RegExp) => [...(re.exec(sql)?.[1] ?? "").matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+  const INTENTS10 = list(SQL10, /check \(intent in \(([\s\S]*?)\)\);/);
+  const SOURCES10 = list(SQL10, /source_ids <@ array\[([\s\S]*?)\]\)\)?;/);
 
-  it("the intent list in 0008 equals the ChatIntent union exactly", () => {
-    const ts = names(/export type ChatIntent =([\s\S]*?);/);
-    assert.ok(ts.length >= 15);
-    assert.deepEqual([...SQL_INTENTS].sort(), ts, "add a new intent to the SQL check (a new migration) before shipping it, or its audit rows are refused");
+  it("the intent list in 0010 equals the ChatIntent values exactly", () => {
+    assert.ok(INTENTS10.length >= 15);
+    assert.deepEqual(INTENTS10, [...CHAT_INTENTS].sort(), "add a new intent to the SQL check (a new migration) before shipping it, or its audit rows are refused");
   });
 
-  it("the source list in 0008 equals the SourceId union exactly", () => {
-    const ts = names(/export type SourceId =([\s\S]*?);/);
-    assert.ok(ts.length >= 10);
-    assert.deepEqual([...SQL_SOURCES].sort(), ts);
+  it("the source list in 0010 equals the SourceId values exactly, and the array limit equals their count", () => {
+    assert.deepEqual(SOURCES10, [...SOURCE_IDS].sort());
+    assert.ok(SQL10.includes(`cardinality(source_ids) <= ${SOURCE_IDS.length}`));
+  });
+
+  it("0010 is additive: everything 0008 allowed is still allowed", () => {
+    for (const v of SQL_INTENTS) assert.ok(INTENTS10.includes(v), `intent ${v} was dropped`);
+    for (const v of SQL_SOURCES) assert.ok(SOURCES10.includes(v), `source ${v} was dropped`);
+    assert.deepEqual(INTENTS10.filter((v) => !SQL_INTENTS.includes(v)), ["knowledge"]);
+    assert.deepEqual(SOURCES10.filter((v) => !SQL_SOURCES.includes(v)), ["knowledge"]);
+  });
+
+  it("0010 adds no column, grant, policy or trigger and does not touch 0008", () => {
+    assert.ok(!/(add column|create table|grant|create policy|create trigger|create function)/i.test(SQL10.replace(/^--.*$/gm, "")));
+    assert.ok(!existsSync(new URL("../supabase/migrations/0010_chat_audit_vocab.sql", import.meta.url)));
   });
 
   it("the burst cap takes a per-user advisory lock, only for the caller's own rows", () => {

@@ -5,7 +5,8 @@ import { Loader2, MessageCircle, SendHorizontal, Trash2, X } from "lucide-react"
 import { aiChatStatus, askBroko, unlockAiChat } from "@/app/(app)/chat/actions";
 import { MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS } from "@/lib/ai-brain/chat/prompts";
 import { ChatLauncher, TurnView } from "@/components/broko-chat-view";
-import { chatReducer, initialChatState, retryText } from "@/lib/chat-state";
+import { AnswerFeedback } from "@/components/knowledge/answer-feedback";
+import { chatReducer, currentFocus, initialChatState, retryText } from "@/lib/chat-state";
 
 const PROJECT_PROMPTS = [
   "What are the key selling points?",
@@ -77,10 +78,20 @@ export function BrokoChat({ demo }: { demo: boolean }) {
   }, [state.open]);
 
   // Only the single question is sent: no history, no user id, no role. The server derives all of that from the session.
+  const focusRef = useRef<ReturnType<typeof currentFocus>>(undefined);
+  // The user's own last few questions, so a follow-up ("who was assigned that?") can be understood. Typed text only; never sent as an answer or an authority.
+  const historyRef = useRef<string[]>([]);
+  useEffect(() => {
+    focusRef.current = currentFocus(state);
+    historyRef.current = state.turns.filter((t): t is Extract<typeof t, { role: "user" }> => t.role === "user").slice(0, -1).slice(-3).map((t) => t.content);
+  }, [state]);
   const call = useCallback((text: string, asked: number) => {
     startTransition(async () => {
       try {
-        const r = await askBroko(text, scopeId.current);
+        // The browser's own IANA zone ("America/Toronto"), so "8:10 PM" means the asker's 8:10 PM. The server validates it and ignores it if invalid.
+        let zone: string | undefined;
+        try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { zone = undefined; }
+        const r = await askBroko(text, scopeId.current, zone, focusRef.current, historyRef.current);
         if (r.ok) dispatch({ type: "reply", reply: r.reply, epoch: asked });
         else dispatch({ type: "error", message: r.error, epoch: asked });
       } catch {
@@ -97,6 +108,8 @@ export function BrokoChat({ demo }: { demo: boolean }) {
     call(text, state.epoch);
   }, [state.pending, state.epoch, call]);
 
+  // The newest answer decides what the header says: a demo workspace that just answered from a real Notion must not still say "synthetic".
+  const lastData = [...state.turns].reverse().find((t): t is Extract<typeof t, { role: "assistant" }> => t.role === "assistant")?.reply.data;
   const retryable = retryText(state);
   const retry = useCallback(() => {
     if (!retryable) return;
@@ -143,7 +156,7 @@ export function BrokoChat({ demo }: { demo: boolean }) {
             <MessageCircle size={18} aria-hidden className="shrink-0 text-brand" />
             <div className="min-w-0 flex-1">
               <h2 className="text-sm font-semibold text-ink">Broko AI</h2>
-              <p className="truncate text-[11px] text-muted">{demo ? "Demo: synthetic sample data" : "Reads your dashboard data. Never changes it."}</p>
+              <p className="truncate text-[11px] text-muted">{demo ? (lastData === "live" ? "Live Notion data. The rest of the dashboard is demo data." : "Demo: synthetic sample data") : "Reads your dashboard data. Never changes it."}</p>
             </div>
             <button type="button" onClick={() => { dispatch({ type: "clear" }); setScope(null); }} disabled={state.turns.length === 0 && !state.pending && !scope} aria-label="Clear conversation" className="flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-page disabled:opacity-40 sm:h-9 sm:w-9"><Trash2 size={16} aria-hidden /></button>
             <button type="button" onClick={close} aria-label="Close assistant" className="flex h-11 w-11 items-center justify-center rounded-md text-fg hover:bg-page sm:h-9 sm:w-9"><X size={18} aria-hidden /></button>
@@ -161,7 +174,7 @@ export function BrokoChat({ demo }: { demo: boolean }) {
                 </ul>
               </div>
             )}
-            {state.turns.map((t, i) => <TurnView key={t.id} turn={t} onAsk={ask} onRetry={retryable && i === state.turns.length - 1 ? retry : undefined} />)}
+            {state.turns.map((t, i) => <TurnView key={t.id} turn={t} onAsk={ask} onRetry={retryable && i === state.turns.length - 1 ? retry : undefined} footer={(reply) => (reply.intent === "blocked" ? null : <AnswerFeedback reply={reply} />)} />)}
             {state.pending && (
               <div role="status" className="mr-8 flex items-center gap-2 text-sm text-muted"><Loader2 size={16} className="animate-spin" aria-hidden /> Looking through your data…</div>
             )}

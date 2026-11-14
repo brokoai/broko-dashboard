@@ -4,8 +4,10 @@ import { cookies, headers } from "next/headers";
 import { getRepo, requireUser } from "@/lib/auth";
 import { attemptUnlock, codeConfigured, isUnlocked, MAX_CODE_INPUT, UNLOCK_COOKIE, UNLOCK_MESSAGES, UNLOCK_TTL_SECONDS, unlockKey, unlockRequired, unlockThrottle } from "@/lib/ai-unlock";
 import { getBackend } from "@/lib/backend";
-import { chatRouter } from "@/lib/chat-model";
+import { chatInterpreter, chatRouter, chatSynthesizer, chatToolAgent } from "@/lib/chat-model";
 import { handleChat, type ChatActionResult } from "@/lib/chat-service";
+import { sharedMeetingCache } from "@/lib/ai-brain/chat/meeting-cache";
+import { timeZoneFor } from "@/lib/ai-brain/assistant/meetings/datetime";
 
 /** True when the signed-in user holds a valid, unexpired AI unlock. Re-checked on every request; nothing is cached or trusted from the browser. */
 async function aiUnlocked(userId: string): Promise<boolean> {
@@ -16,14 +18,19 @@ async function aiUnlocked(userId: string): Promise<boolean> {
 
 /**
  * The only entry from the floating chat to the AI Brain. Authenticates first; the user, role and data mode come from the
- * server session and backend, never from the request. The browser sends one question and nothing else.
- * The model interpreter (paid) is handed over ONLY to an unlocked user; everyone else gets the deterministic chat.
+ * server session and backend, never from the request. The browser sends one question, its own time zone, and (after a meeting answer) the small
+ * conversation focus the server gave it, which the server re-validates and re-authorizes; it sends no history.
+ * The model interpreter and the analysis model (both paid) are handed over ONLY to an unlocked user; everyone else gets the deterministic chat.
  */
-export async function askBroko(message: string, projectId?: string): Promise<ChatActionResult> {
+export async function askBroko(message: string, projectId?: string, clientTimeZone?: string, focus?: unknown, history?: unknown): Promise<ChatActionResult> {
   const user = await requireUser();
   const backend = await getBackend();
-  const router = (await aiUnlocked(user.id)) ? chatRouter() : null;
-  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo, router: router ?? undefined }, message, projectId);
+  const unlocked = await aiUnlocked(user.id);
+  const router = unlocked ? chatRouter() : null;
+  const synthesizer = unlocked ? chatSynthesizer() : null;
+  const interpreter = unlocked ? chatInterpreter() : null;
+  const toolAgent = unlocked ? chatToolAgent() : null;
+  return handleChat({ user, backendKind: backend.kind, repoFor: getRepo, router: router ?? undefined, synthesizer: synthesizer ?? undefined, interpreter: interpreter ?? undefined, toolAgent: toolAgent ?? undefined, timeZone: timeZoneFor(clientTimeZone, process.env), meetingCache: sharedMeetingCache }, message, projectId, focus, history);
 }
 
 /** What the chat should offer: whether AI mode exists at all, and whether this user has unlocked it. Reveals no configuration. */
